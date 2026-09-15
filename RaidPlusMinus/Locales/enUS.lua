@@ -50,7 +50,7 @@ L["SYNC_SYNCED"] = "Synced: %s"
 L["SYNC_RESET_BY"] = "Reset (%s): %s"
 
 -- Chat report
-L["CHAT_REPORT_HEADER"] = "{skull}{skull}{skull}MINUSES{skull}{skull}{skull}"
+L["CHAT_REPORT_LABEL"] = "----REPORT----"
 
 -- Slash command output (status/help)
 L["STATUS_HEADER"] = "status:"

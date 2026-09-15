@@ -52,7 +52,7 @@ L["SYNC_SYNCED"] = "Синхронизировано: %s"
 L["SYNC_RESET_BY"] = "Сброшено (%s): %s"
 
 -- Chat report
-L["CHAT_REPORT_HEADER"] = "{skull}{skull}{skull}МИНУСА{skull}{skull}{skull}"
+L["CHAT_REPORT_LABEL"] = "----ОТЧЁТ----"
 
 -- Slash command output (status/help)
 L["STATUS_HEADER"] = "статус:"
