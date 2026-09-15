@@ -51,6 +51,10 @@
 - World of Warcraft: Wrath of the Lich King, client version 3.3.5a (Interface 30300).
 - No other addon dependencies.
 
+### RaidRoll integration
+
+If the RaidRoll addon is also installed, Raid +/- appends each roller's current score in parentheses next to their roll, e.g. `95 (+3)` or `42 (-2)`. This is a display-only annotation added after RaidRoll renders its own roll list — the roll value itself is never modified, and RaidRoll's own data isn't touched.
+
 ### Tested on
 
 - WoWCircle (3.3.5a realm).
@@ -107,6 +111,10 @@ The UI language is selected automatically based on your client's locale (`GetLoc
 
 - World of Warcraft: Wrath of the Lich King, версия клиента 3.3.5a (Interface 30300).
 - Другие аддоны в качестве зависимостей не требуются.
+
+### Интеграция с RaidRoll
+
+Если также установлен аддон RaidRoll, Raid +/- дописывает текущий счёт игрока в скобках рядом с его роллом, например `95 (+3)` или `42 (-2)`. Это чисто визуальная надпись, добавляемая уже после того, как RaidRoll отрисовал свой список роллов — сам ролл никак не изменяется, а данные RaidRoll не затрагиваются.
 
 ### Протестировано на
 

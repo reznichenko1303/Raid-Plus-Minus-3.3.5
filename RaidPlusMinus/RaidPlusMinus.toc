@@ -2,9 +2,10 @@
 ## Title: Raid +/-
 ## Notes: Tracks raid members' plus/minus scores for fair roll/loot distribution
 ## Notes-ruRU: Учет плюсов и минусов участников рейда (для честного распределения ролла/лута)
-## Author: Claude
+## Author: Goose
 ## Version: 1.0
 ## SavedVariables: RaidPlusMinusDB
+## OptionalDeps: RaidRoll
 
 Locales\enUS.lua
 Locales\ruRU.lua
