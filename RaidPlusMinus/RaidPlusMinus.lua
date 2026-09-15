@@ -933,6 +933,50 @@ if ToggleDropDownMenu then
 end
 
 ------------------------------------------------------------
+-- RaidRoll integration (optional, only active if the separate
+-- "RaidRoll" addon is also installed and loaded)
+--
+-- We never touch RaidRoll's own saved data or the roll value itself —
+-- we hook RR_Display (its row-rendering function) with hooksecurefunc,
+-- which always runs strictly AFTER RaidRoll has already finished
+-- setting each row's text, and only append our own "(+N)"/"(-N)" to
+-- the FontString that's already on screen.
+------------------------------------------------------------
+local raidRollHooked = false
+
+local function RaidRoll_AppendScores(RR_DisplayID)
+  -- RollerName and RR_ScrollOffset are RaidRoll's own globals
+  -- (RaidRoll_OnLoad.lua), not ours — read-only access.
+  if type(RollerName) ~= "table" or type(RR_ScrollOffset) ~= "number" then return end
+  local nameRow = RollerName[RR_DisplayID]
+  if type(nameRow) ~= "table" then return end
+  if type(RaidPlusMinusDB) ~= "table" or type(RaidPlusMinusDB.players) ~= "table" then return end
+
+  for i = 1, 5 do
+    local rolledFS = _G["RR_Rolled" .. i]
+    if rolledFS then
+      local text = rolledFS:GetText()
+      -- Empty text means RaidRoll intentionally hid this row (roll
+      -- filtered out by its own settings) — leave it alone.
+      if text and text ~= "" then
+        local name = nameRow[i + RR_ScrollOffset]
+        local p = name and RaidPlusMinusDB.players[name]
+        if p and p.score and p.score ~= 0 then
+          rolledFS:SetText(text .. " (" .. FormatScore(p.score) .. ")")
+        end
+      end
+    end
+  end
+end
+
+local function TryHookRaidRoll()
+  if raidRollHooked then return end
+  if type(RR_Display) ~= "function" then return end
+  raidRollHooked = true
+  hooksecurefunc("RR_Display", RaidRoll_AppendScores)
+end
+
+------------------------------------------------------------
 -- Events
 ------------------------------------------------------------
 local eventFrame = CreateFrame("Frame")
@@ -943,6 +987,10 @@ eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
+  if event ~= "CHAT_MSG_ADDON" then
+    TryHookRaidRoll()
+  end
+
   if event == "ADDON_LOADED" then
     local addonName = ...
     if addonName ~= ADDON_NAME then return end
