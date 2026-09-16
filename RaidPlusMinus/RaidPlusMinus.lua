@@ -9,6 +9,8 @@ local ROW_HEIGHT = 20
 local HISTORY_MINI_LIMIT = 5
 local HISTORY_LINE_HEIGHT = 14
 local TAB_BAR_HEIGHT = 24
+local TITLE_GAP = 10   -- extra breathing room below the addon title
+local TABS_GAP = 8     -- extra breathing room below the Players/History tabs
 local rows = {}
 local expandedPlayers = {}
 
@@ -100,6 +102,22 @@ local function StyleDarkButton(btn, w, h)
   end)
 end
 
+-- The engine's own caret is barely visible against a dark backdrop, so we
+-- draw our own and blink it manually via OnCursorChanged/OnUpdate.
+local darkEditCursors = {}
+local cursorBlinkFrame = CreateFrame("Frame")
+local cursorBlinkElapsed = 0
+cursorBlinkFrame:SetScript("OnUpdate", function(self, elapsed)
+  cursorBlinkElapsed = cursorBlinkElapsed + elapsed
+  if cursorBlinkElapsed < 0.5 then return end
+  cursorBlinkElapsed = 0
+  for _, cursor in ipairs(darkEditCursors) do
+    if cursor:IsShown() then
+      cursor:SetAlpha(cursor:GetAlpha() > 0.5 and 0 or 1)
+    end
+  end
+end)
+
 local function StyleDarkEditBox(box)
   for _, r in ipairs({ box:GetRegions() }) do
     if r.GetObjectType and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
@@ -116,13 +134,30 @@ local function StyleDarkEditBox(box)
   box:SetTextColor(0.95, 0.95, 0.95)
   box:SetFontObject("GameFontHighlight")
   box:SetTextInsets(6, 6, 0, 0)
+
+  local cursor = box:CreateTexture(nil, "OVERLAY")
+  cursor:SetTexture("Interface\\Buttons\\WHITE8x8")
+  cursor:SetVertexColor(1, 1, 1, 1)
+  cursor:SetWidth(1)
+  cursor:Hide()
+  table.insert(darkEditCursors, cursor)
+
+  box:HookScript("OnCursorChanged", function(self, x, y, w, h)
+    cursor:ClearAllPoints()
+    cursor:SetPoint("TOPLEFT", self, "TOPLEFT", x, y)
+    cursor:SetHeight(math.abs(h))
+    cursor:SetAlpha(1)
+    cursorBlinkElapsed = 0
+  end)
+  box:HookScript("OnEditFocusGained", function() cursor:Show() end)
+  box:HookScript("OnEditFocusLost", function() cursor:Hide() end)
 end
 
 ------------------------------------------------------------
 -- Main frame
 ------------------------------------------------------------
 local frame = CreateFrame("Frame", "RaidPlusMinusFrame", UIParent)
-frame:SetSize(300, 446 + TAB_BAR_HEIGHT)
+frame:SetSize(300, 446 + TAB_BAR_HEIGHT + TITLE_GAP + TABS_GAP)
 frame:SetPoint("CENTER")
 frame:SetMovable(true)
 frame:EnableMouse(true)
@@ -221,7 +256,7 @@ frame.syncStatus:SetText("")
 frame.syncStatus:SetTextColor(0.55, 0.55, 0.6)
 
 local tabPlayersBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-tabPlayersBtn:SetPoint("TOPLEFT", 16, -20 - TAB_BAR_HEIGHT)
+tabPlayersBtn:SetPoint("TOPLEFT", 16, -20 - TAB_BAR_HEIGHT - TITLE_GAP)
 tabPlayersBtn:SetText(L["TAB_PLAYERS"])
 StyleDarkButton(tabPlayersBtn, 90, 20)
 
@@ -240,7 +275,7 @@ frame.emptyText:SetTextColor(0.55, 0.55, 0.6)
 frame.emptyText:Hide()
 
 local headerName = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerName:SetPoint("TOPLEFT", 24, -64 - TAB_BAR_HEIGHT)
+headerName:SetPoint("TOPLEFT", 24, -64 - TAB_BAR_HEIGHT - TITLE_GAP - TABS_GAP)
 headerName:SetText(L["HEADER_PLAYER"])
 headerName:SetTextColor(0.7, 0.7, 0.75)
 
@@ -254,7 +289,7 @@ headerScore:SetTextColor(0.7, 0.7, 0.75)
 -- in the list — useful if right-click/menu doesn't work)
 ------------------------------------------------------------
 local addNameLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-addNameLabel:SetPoint("TOPLEFT", 24, -42 - TAB_BAR_HEIGHT)
+addNameLabel:SetPoint("TOPLEFT", 24, -42 - TAB_BAR_HEIGHT - TITLE_GAP - TABS_GAP)
 addNameLabel:SetText(L["ADD_NAME_LABEL"])
 addNameLabel:SetTextColor(0.75, 0.75, 0.8)
 
@@ -290,7 +325,7 @@ addNameBox:SetScript("OnEnterPressed", function() ManualAddClick(1) end)
 addNameBox:SetScript("OnEscapePressed", function() addNameBox:ClearFocus() end)
 
 local scrollFrame = CreateFrame("ScrollFrame", "RaidPlusMinusScrollFrame", frame, "UIPanelScrollFrameTemplate")
-scrollFrame:SetPoint("TOPLEFT", 16, -80 - TAB_BAR_HEIGHT)
+scrollFrame:SetPoint("TOPLEFT", 16, -80 - TAB_BAR_HEIGHT - TITLE_GAP - TABS_GAP)
 scrollFrame:SetPoint("BOTTOMRIGHT", -30, 70)
 
 local content = CreateFrame("Frame", nil, scrollFrame)
@@ -303,7 +338,7 @@ scrollFrame:SetScrollChild(content)
 ------------------------------------------------------------
 local historyScrollFrame = CreateFrame("ScrollFrame", "RaidPlusMinusHistoryScrollFrame", frame,
   "UIPanelScrollFrameTemplate")
-historyScrollFrame:SetPoint("TOPLEFT", 16, -80 - TAB_BAR_HEIGHT)
+historyScrollFrame:SetPoint("TOPLEFT", 16, -80 - TAB_BAR_HEIGHT - TITLE_GAP - TABS_GAP)
 historyScrollFrame:SetPoint("BOTTOMRIGHT", -30, 70)
 historyScrollFrame:Hide()
 
@@ -1126,6 +1161,14 @@ BuildPlayerList = function()
   RefreshRosterNameSet(roster)
   local canEdit = CanEdit()
 
+  if canEdit then
+    addPlusBtn:Show()
+    addMinusBtn:Show()
+  else
+    addPlusBtn:Hide()
+    addMinusBtn:Hide()
+  end
+
   local names = {}
   local classMap = {}
   for _, entry in ipairs(roster) do
@@ -1174,11 +1217,11 @@ BuildPlayerList = function()
     end
 
     if canEdit then
-      row.minus:Enable()
-      row.plus:Enable()
+      row.minus:Show()
+      row.plus:Show()
     else
-      row.minus:Disable()
-      row.plus:Disable()
+      row.minus:Hide()
+      row.plus:Hide()
     end
 
     local rowHeight = UpdateRowHistoryPanel(row, name)
