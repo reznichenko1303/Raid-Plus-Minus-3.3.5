@@ -42,118 +42,6 @@ local UpdateMinimapButtonPosition
 local hasRequestedSync = false
 
 ------------------------------------------------------------
--- Dark modern UI style (flat backgrounds/borders instead of the
--- default stone dialog skin, similar to modern raid-utility addons)
-------------------------------------------------------------
-local function StyleDarkButton(btn, w, h)
-  if w then btn:SetSize(w, h or 22) end
-  -- Hide the default UIPanelButton textures (3.3.5-safe: SetAlpha, not SetTexture(nil))
-  local nt = btn:GetNormalTexture()
-  if nt then nt:SetAlpha(0) end
-  local pt = btn:GetPushedTexture()
-  if pt then pt:SetAlpha(0) end
-  local ht = btn:GetHighlightTexture()
-  if ht then ht:SetAlpha(0) end
-  local dt = btn:GetDisabledTexture()
-  if dt then dt:SetAlpha(0) end
-
-  if not btn._rpmBg then
-    btn._rpmBg = btn:CreateTexture(nil, "BACKGROUND")
-    btn._rpmBg:SetAllPoints()
-    btn._rpmBg:SetTexture("Interface\\Buttons\\WHITE8x8")
-    btn._rpmBg:SetVertexColor(0.16, 0.16, 0.19, 1)
-  end
-  if not btn._rpmBorder then
-    btn._rpmBorder = CreateFrame("Frame", nil, btn)
-    btn._rpmBorder:SetAllPoints()
-    btn._rpmBorder:SetBackdrop({
-      edgeFile = "Interface\\Buttons\\WHITE8x8",
-      edgeSize = 1,
-    })
-    btn._rpmBorder:SetBackdropBorderColor(0.38, 0.38, 0.42, 1)
-  end
-  local fs = btn:GetFontString()
-  if fs then
-    fs:SetTextColor(0.92, 0.92, 0.92)
-    fs:SetShadowOffset(0, 0)
-  end
-
-  btn:HookScript("OnEnter", function(self)
-    if self:IsEnabled() and self._rpmBg then self._rpmBg:SetVertexColor(0.24, 0.24, 0.28, 1) end
-  end)
-  btn:HookScript("OnLeave", function(self)
-    if self:IsEnabled() and self._rpmBg then self._rpmBg:SetVertexColor(0.16, 0.16, 0.19, 1) end
-  end)
-  btn:HookScript("OnMouseDown", function(self)
-    if self._rpmBg then self._rpmBg:SetVertexColor(0.10, 0.10, 0.12, 1) end
-  end)
-  btn:HookScript("OnMouseUp", function(self)
-    if self:IsEnabled() and self._rpmBg then self._rpmBg:SetVertexColor(0.24, 0.24, 0.28, 1) end
-  end)
-  btn:HookScript("OnDisable", function(self)
-    if self._rpmBg then self._rpmBg:SetVertexColor(0.10, 0.10, 0.11, 0.7) end
-    local f = self:GetFontString()
-    if f then f:SetTextColor(0.45, 0.45, 0.45) end
-  end)
-  btn:HookScript("OnEnable", function(self)
-    if self._rpmBg then self._rpmBg:SetVertexColor(0.16, 0.16, 0.19, 1) end
-    local f = self:GetFontString()
-    if f then f:SetTextColor(0.92, 0.92, 0.92) end
-  end)
-end
-
--- The engine's own caret is barely visible against a dark backdrop, so we
--- draw our own and blink it manually via OnCursorChanged/OnUpdate.
-local darkEditCursors = {}
-local cursorBlinkFrame = CreateFrame("Frame")
-local cursorBlinkElapsed = 0
-cursorBlinkFrame:SetScript("OnUpdate", function(self, elapsed)
-  cursorBlinkElapsed = cursorBlinkElapsed + elapsed
-  if cursorBlinkElapsed < 0.5 then return end
-  cursorBlinkElapsed = 0
-  for _, cursor in ipairs(darkEditCursors) do
-    if cursor:IsShown() then
-      cursor:SetAlpha(cursor:GetAlpha() > 0.5 and 0 or 1)
-    end
-  end
-end)
-
-local function StyleDarkEditBox(box)
-  for _, r in ipairs({ box:GetRegions() }) do
-    if r.GetObjectType and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
-  end
-  box:SetBackdrop({
-    bgFile = "Interface\\Buttons\\WHITE8x8",
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    tile = false,
-    edgeSize = 1,
-    insets = { left = 6, right = 6, top = 4, bottom = 4 },
-  })
-  box:SetBackdropColor(0.12, 0.12, 0.14, 1)
-  box:SetBackdropBorderColor(0.32, 0.32, 0.36, 1)
-  box:SetTextColor(0.95, 0.95, 0.95)
-  box:SetFontObject("GameFontHighlight")
-  box:SetTextInsets(6, 6, 0, 0)
-
-  local cursor = box:CreateTexture(nil, "OVERLAY")
-  cursor:SetTexture("Interface\\Buttons\\WHITE8x8")
-  cursor:SetVertexColor(1, 1, 1, 1)
-  cursor:SetWidth(1)
-  cursor:Hide()
-  table.insert(darkEditCursors, cursor)
-
-  box:HookScript("OnCursorChanged", function(self, x, y, w, h)
-    cursor:ClearAllPoints()
-    cursor:SetPoint("TOPLEFT", self, "TOPLEFT", x, y)
-    cursor:SetHeight(math.abs(h))
-    cursor:SetAlpha(1)
-    cursorBlinkElapsed = 0
-  end)
-  box:HookScript("OnEditFocusGained", function() cursor:Show() end)
-  box:HookScript("OnEditFocusLost", function() cursor:Hide() end)
-end
-
-------------------------------------------------------------
 -- Main frame
 ------------------------------------------------------------
 local frame = CreateFrame("Frame", "RaidPlusMinusFrame", UIParent)
@@ -165,15 +53,13 @@ frame:RegisterForDrag("LeftButton")
 frame:SetScript("OnDragStart", frame.StartMoving)
 frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 frame:SetBackdrop({
-  bgFile = "Interface\\Buttons\\WHITE8x8",
-  edgeFile = "Interface\\Buttons\\WHITE8x8",
-  tile = false,
-  tileSize = 0,
-  edgeSize = 1,
-  insets = { left = 1, right = 1, top = 1, bottom = 1 },
+  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+  tile = true,
+  tileSize = 32,
+  edgeSize = 32,
+  insets = { left = 11, right = 12, top = 12, bottom = 11 },
 })
-frame:SetBackdropColor(0.07, 0.07, 0.09, 0.97)
-frame:SetBackdropBorderColor(0.28, 0.28, 0.32, 1)
 frame:SetFrameStrata("HIGH")
 frame:Hide()
 
@@ -244,26 +130,23 @@ end)
 local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 title:SetPoint("TOP", 0, -14)
 title:SetText("Raid +/-")
-title:SetTextColor(1, 0.82, 0.0)
 
 local closeBtn = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-closeBtn:SetPoint("TOPRIGHT", -2, -2)
-closeBtn:SetScale(0.9)
+closeBtn:SetPoint("TOPRIGHT", -4, -4)
 
 frame.syncStatus = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 frame.syncStatus:SetPoint("TOPLEFT", 20, -20)
 frame.syncStatus:SetText("")
-frame.syncStatus:SetTextColor(0.55, 0.55, 0.6)
 
 local tabPlayersBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+tabPlayersBtn:SetSize(90, 20)
 tabPlayersBtn:SetPoint("TOPLEFT", 16, -20 - TAB_BAR_HEIGHT - TITLE_GAP)
 tabPlayersBtn:SetText(L["TAB_PLAYERS"])
-StyleDarkButton(tabPlayersBtn, 90, 20)
 
 local tabHistoryBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+tabHistoryBtn:SetSize(90, 20)
 tabHistoryBtn:SetPoint("LEFT", tabPlayersBtn, "RIGHT", 4, 0)
 tabHistoryBtn:SetText(L["TAB_HISTORY"])
-StyleDarkButton(tabHistoryBtn, 90, 20)
 
 tabPlayersBtn:SetScript("OnClick", function() SetActiveTab("players") end)
 tabHistoryBtn:SetScript("OnClick", function() SetActiveTab("history") end)
@@ -271,18 +154,15 @@ tabHistoryBtn:SetScript("OnClick", function() SetActiveTab("history") end)
 frame.emptyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 frame.emptyText:SetPoint("CENTER", 0, 20)
 frame.emptyText:SetText(L["EMPTY_TEXT"])
-frame.emptyText:SetTextColor(0.55, 0.55, 0.6)
 frame.emptyText:Hide()
 
 local headerName = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 headerName:SetPoint("TOPLEFT", 24, -64 - TAB_BAR_HEIGHT - TITLE_GAP - TABS_GAP)
 headerName:SetText(L["HEADER_PLAYER"])
-headerName:SetTextColor(0.7, 0.7, 0.75)
 
 local headerScore = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 headerScore:SetPoint("LEFT", headerName, "RIGHT", 122, 0)
 headerScore:SetText(L["HEADER_SCORE"])
-headerScore:SetTextColor(0.7, 0.7, 0.75)
 
 ------------------------------------------------------------
 -- Manual add by nickname (no need to be in a raid/see the player
@@ -291,24 +171,22 @@ headerScore:SetTextColor(0.7, 0.7, 0.75)
 local addNameLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 addNameLabel:SetPoint("TOPLEFT", 24, -42 - TAB_BAR_HEIGHT - TITLE_GAP - TABS_GAP)
 addNameLabel:SetText(L["ADD_NAME_LABEL"])
-addNameLabel:SetTextColor(0.75, 0.75, 0.8)
 
 local addNameBox = CreateFrame("EditBox", "RaidPlusMinusAddNameBox", frame, "InputBoxTemplate")
 addNameBox:SetSize(110, 20)
 addNameBox:SetPoint("LEFT", addNameLabel, "RIGHT", 8, 0)
 addNameBox:SetAutoFocus(false)
 addNameBox:SetMaxLetters(24)
-StyleDarkEditBox(addNameBox)
 
 local addPlusBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+addPlusBtn:SetSize(24, 20)
 addPlusBtn:SetText("+")
 addPlusBtn:SetPoint("LEFT", addNameBox, "RIGHT", 6, 0)
-StyleDarkButton(addPlusBtn, 24, 20)
 
 local addMinusBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+addMinusBtn:SetSize(24, 20)
 addMinusBtn:SetText("-")
 addMinusBtn:SetPoint("LEFT", addPlusBtn, "RIGHT", 4, 0)
-StyleDarkButton(addMinusBtn, 24, 20)
 
 local function ManualAddClick(sign)
   local name = strtrim(addNameBox:GetText() or "")
@@ -349,13 +227,12 @@ historyScrollFrame:SetScrollChild(historyContent)
 local historyEmptyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 historyEmptyText:SetPoint("CENTER", 0, 20)
 historyEmptyText:SetText(L["HISTORY_EMPTY"])
-historyEmptyText:SetTextColor(0.55, 0.55, 0.6)
 historyEmptyText:Hide()
 
 local sortBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+sortBtn:SetSize(74, 20)
 sortBtn:SetPoint("BOTTOMLEFT", 16, 40)
 sortBtn:SetText(L["SORT_BY_SCORE"])
-StyleDarkButton(sortBtn, 74, 20)
 sortBtn:SetScript("OnClick", function(self)
   if RaidPlusMinusDB.sort == "score" then
     RaidPlusMinusDB.sort = "name"
@@ -368,9 +245,9 @@ sortBtn:SetScript("OnClick", function(self)
 end)
 
 local resetBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+resetBtn:SetSize(52, 20)
 resetBtn:SetPoint("LEFT", sortBtn, "RIGHT", 6, 0)
 resetBtn:SetText(L["BTN_RESET"])
-StyleDarkButton(resetBtn, 52, 20)
 resetBtn:SetScript("OnClick", function()
   if not CanEdit() then
     UIErrorsFrame:AddMessage(L["ERR_RESET_PERM"], 1, 0.2, 0.2)
@@ -380,9 +257,9 @@ resetBtn:SetScript("OnClick", function()
 end)
 
 local syncBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+syncBtn:SetSize(62, 20)
 syncBtn:SetPoint("LEFT", resetBtn, "RIGHT", 6, 0)
 syncBtn:SetText(L["BTN_SYNC"])
-StyleDarkButton(syncBtn, 62, 20)
 syncBtn:SetScript("OnClick", function()
   if not CanEdit() then
     UIErrorsFrame:AddMessage(L["ERR_SYNC_PERM"], 1, 0.2, 0.2)
@@ -393,25 +270,25 @@ syncBtn:SetScript("OnClick", function()
 end)
 
 local chatBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+chatBtn:SetSize(46, 20)
 chatBtn:SetPoint("LEFT", syncBtn, "RIGHT", 6, 0)
 chatBtn:SetText(L["BTN_CHAT"])
-StyleDarkButton(chatBtn, 46, 20)
 chatBtn:SetScript("OnClick", function()
   PostMinusesToChat()
 end)
 
 local exportBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+exportBtn:SetSize(70, 20)
 exportBtn:SetPoint("BOTTOMLEFT", 16, 14)
 exportBtn:SetText(L["BTN_EXPORT"])
-StyleDarkButton(exportBtn, 70, 20)
 exportBtn:SetScript("OnClick", function()
   StaticPopup_Show("RPM_EXPORT")
 end)
 
 local importBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+importBtn:SetSize(70, 20)
 importBtn:SetPoint("LEFT", exportBtn, "RIGHT", 6, 0)
 importBtn:SetText(L["BTN_IMPORT"])
-StyleDarkButton(importBtn, 70, 20)
 importBtn:SetScript("OnClick", function()
   StaticPopup_Show("RPM_IMPORT")
 end)
@@ -436,31 +313,26 @@ inputFrame:RegisterForDrag("LeftButton")
 inputFrame:SetScript("OnDragStart", inputFrame.StartMoving)
 inputFrame:SetScript("OnDragStop", inputFrame.StopMovingOrSizing)
 inputFrame:SetBackdrop({
-  bgFile = "Interface\\Buttons\\WHITE8x8",
-  edgeFile = "Interface\\Buttons\\WHITE8x8",
-  tile = false,
-  tileSize = 0,
-  edgeSize = 1,
-  insets = { left = 1, right = 1, top = 1, bottom = 1 },
+  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+  tile = true,
+  tileSize = 32,
+  edgeSize = 32,
+  insets = { left = 11, right = 12, top = 12, bottom = 11 },
 })
-inputFrame:SetBackdropColor(0.07, 0.07, 0.09, 0.97)
-inputFrame:SetBackdropBorderColor(0.28, 0.28, 0.32, 1)
 inputFrame:Hide()
 tinsert(UISpecialFrames, "RaidPlusMinusInputFrame")
 
 inputFrame.title = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-inputFrame.title:SetPoint("TOP", 0, -14)
+inputFrame.title:SetPoint("TOP", 0, -16)
 inputFrame.title:SetText(L["ACTION_ADD_PLUS"])
-inputFrame.title:SetTextColor(1, 0.82, 0.0)
 
 inputFrame.playerLabel = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-inputFrame.playerLabel:SetPoint("TOP", 0, -40)
-inputFrame.playerLabel:SetTextColor(0.9, 0.9, 0.95)
+inputFrame.playerLabel:SetPoint("TOP", 0, -42)
 
 local valueLabel = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 valueLabel:SetPoint("TOPLEFT", 24, -70)
 valueLabel:SetText(L["INPUT_VALUE_LABEL"])
-valueLabel:SetTextColor(0.75, 0.75, 0.8)
 
 inputFrame.valueBox = CreateFrame("EditBox", "RaidPlusMinusValueBox", inputFrame, "InputBoxTemplate")
 inputFrame.valueBox:SetSize(50, 20)
@@ -468,24 +340,21 @@ inputFrame.valueBox:SetPoint("LEFT", valueLabel, "RIGHT", 10, 0)
 inputFrame.valueBox:SetAutoFocus(false)
 inputFrame.valueBox:SetNumeric(true)
 inputFrame.valueBox:SetMaxLetters(4)
-StyleDarkEditBox(inputFrame.valueBox)
 
 local noteLabel = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 noteLabel:SetPoint("TOPLEFT", 24, -100)
 noteLabel:SetText(L["INPUT_NOTE_LABEL"])
-noteLabel:SetTextColor(0.75, 0.75, 0.8)
 
 inputFrame.noteBox = CreateFrame("EditBox", "RaidPlusMinusNoteBox", inputFrame, "InputBoxTemplate")
 inputFrame.noteBox:SetSize(160, 20)
 inputFrame.noteBox:SetPoint("LEFT", noteLabel, "RIGHT", 10, 0)
 inputFrame.noteBox:SetAutoFocus(false)
 inputFrame.noteBox:SetMaxLetters(60)
-StyleDarkEditBox(inputFrame.noteBox)
 
 local okBtn = CreateFrame("Button", nil, inputFrame, "UIPanelButtonTemplate")
+okBtn:SetSize(70, 20)
 okBtn:SetPoint("BOTTOMLEFT", 30, 14)
 okBtn:SetText("OK")
-StyleDarkButton(okBtn, 70, 20)
 okBtn:SetScript("OnClick", function()
   local amount = tonumber(inputFrame.valueBox:GetText())
   if not amount or amount <= 0 then
@@ -507,16 +376,12 @@ okBtn:SetScript("OnClick", function()
 end)
 
 local cancelBtn = CreateFrame("Button", nil, inputFrame, "UIPanelButtonTemplate")
+cancelBtn:SetSize(70, 20)
 cancelBtn:SetPoint("BOTTOMRIGHT", -30, 14)
 cancelBtn:SetText(L["BTN_CANCEL"])
-StyleDarkButton(cancelBtn, 70, 20)
 cancelBtn:SetScript("OnClick", function() inputFrame:Hide() end)
 
-do
-  local inputCloseBtn = CreateFrame("Button", nil, inputFrame, "UIPanelCloseButton")
-  inputCloseBtn:SetPoint("TOPRIGHT", -2, -2)
-  inputCloseBtn:SetScale(0.9)
-end
+CreateFrame("Button", nil, inputFrame, "UIPanelCloseButton"):SetPoint("TOPRIGHT", -4, -4)
 
 inputFrame.valueBox:SetScript("OnEnterPressed", function() inputFrame.noteBox:SetFocus() end)
 inputFrame.valueBox:SetScript("OnEscapePressed", function() inputFrame:Hide() end)
@@ -1020,21 +885,21 @@ GetRow = function(i)
   row.score:SetJustifyH("CENTER")
 
   row.minus = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  row.minus:SetSize(20, 18)
   row.minus:SetText("-")
   row.minus:SetPoint("LEFT", row.score, "RIGHT", 6, 0)
-  StyleDarkButton(row.minus, 20, 18)
 
   row.plus = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  row.plus:SetSize(20, 18)
   row.plus:SetText("+")
   row.plus:SetPoint("LEFT", row.minus, "RIGHT", 4, 0)
-  StyleDarkButton(row.plus, 20, 18)
 
   -- Expand/collapse the mini-history panel for this player (hidden
   -- entirely when the player has no recorded history).
   row.expandBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  row.expandBtn:SetSize(18, 18)
   row.expandBtn:SetText(">")
   row.expandBtn:SetPoint("LEFT", row.plus, "RIGHT", 4, 0)
-  StyleDarkButton(row.expandBtn, 18, 18)
   row.expandBtn:SetScript("OnClick", function()
     local name = row.playerName
     if not name then return end
