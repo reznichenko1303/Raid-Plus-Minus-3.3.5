@@ -3,12 +3,22 @@ local L = RaidPlusMinusLocale
 
 -- UI labels
 L["EMPTY_TEXT"] = "You are not in a raid/party"
+L["EMPTY_TEXT_NO_SCORES"] = "No players with plus/minus yet"
 L["HEADER_PLAYER"] = "Player"
 L["HEADER_SCORE"] = "Score"
 L["ADD_NAME_LABEL"] = "Name:"
 L["SORT_BY_SCORE"] = "Sort: score"
 L["SORT_BY_NAME"] = "Sort: name"
 L["TOOLTIP_NO_NOTES"] = "No notes"
+L["TAB_PLAYERS"] = "Players"
+L["TAB_HISTORY"] = "History"
+L["HISTORY_EMPTY"] = "No history yet"
+
+-- Relative time (history feed)
+L["TIME_JUST_NOW"] = "just now"
+L["TIME_MINUTES_AGO"] = "%d min ago"
+L["TIME_HOURS_AGO"] = "%d h ago"
+L["TIME_DAYS_AGO"] = "%d d ago"
 
 -- Buttons
 L["BTN_RESET"] = "Reset"
@@ -41,6 +51,7 @@ L["ERR_GENERIC"] = "Error: %s"
 L["MSG_RESET_DONE"] = "All scores have been reset."
 L["MSG_RESET_ERR"] = "Reset error: %s"
 L["MSG_BROADCAST_FAILED"] = "Broadcast failed: %s"
+L["MSG_MENU_INJECT_ERROR"] = "menu inject error: %s"
 L["ERR_ADD_USAGE"] = "Use plus or minus: /rpm add plus Name [value] [note]"
 
 -- Sync/status text

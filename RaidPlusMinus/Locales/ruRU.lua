@@ -5,12 +5,22 @@ local L = RaidPlusMinusLocale
 
 -- UI labels
 L["EMPTY_TEXT"] = "Вы не в рейде/группе"
+L["EMPTY_TEXT_NO_SCORES"] = "Пока нет игроков с плюсами/минусами"
 L["HEADER_PLAYER"] = "Игрок"
 L["HEADER_SCORE"] = "Очки"
 L["ADD_NAME_LABEL"] = "Ник:"
 L["SORT_BY_SCORE"] = "Сорт: очки"
 L["SORT_BY_NAME"] = "Сорт: имя"
 L["TOOLTIP_NO_NOTES"] = "Нет заметок"
+L["TAB_PLAYERS"] = "Игроки"
+L["TAB_HISTORY"] = "История"
+L["HISTORY_EMPTY"] = "Пока нет истории"
+
+-- Relative time (history feed)
+L["TIME_JUST_NOW"] = "только что"
+L["TIME_MINUTES_AGO"] = "%d мин. назад"
+L["TIME_HOURS_AGO"] = "%d ч. назад"
+L["TIME_DAYS_AGO"] = "%d дн. назад"
 
 -- Buttons
 L["BTN_RESET"] = "Сброс"
@@ -43,6 +53,7 @@ L["ERR_GENERIC"] = "Ошибка: %s"
 L["MSG_RESET_DONE"] = "Все очки сброшены."
 L["MSG_RESET_ERR"] = "Ошибка сброса: %s"
 L["MSG_BROADCAST_FAILED"] = "Рассылка не удалась: %s"
+L["MSG_MENU_INJECT_ERROR"] = "ошибка добавления в меню: %s"
 L["ERR_ADD_USAGE"] = "Используй plus или minus: /rpm add plus Ник [значение] [заметка]"
 
 -- Sync/status text

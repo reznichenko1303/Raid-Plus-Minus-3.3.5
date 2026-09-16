@@ -6,9 +6,14 @@ local L = RaidPlusMinusLocale
 -- Forward declarations
 ------------------------------------------------------------
 local ROW_HEIGHT = 20
+local HISTORY_MINI_LIMIT = 5
+local HISTORY_LINE_HEIGHT = 14
+local TAB_BAR_HEIGHT = 24
 local rows = {}
+local expandedPlayers = {}
 
 local BuildPlayerList
+local BuildHistoryList
 local GetRosterNames
 local EnsurePlayer
 local AddChange
@@ -27,14 +32,97 @@ local OpenInputWindow
 local FormatScore
 local PostMinusesToChat
 local RefreshRosterNameSet
+local RefreshWindow
+local SetActiveTab
+local ToggleMainWindow
+local UpdateMinimapButtonPosition
 
 local hasRequestedSync = false
+
+------------------------------------------------------------
+-- Dark modern UI style (flat backgrounds/borders instead of the
+-- default stone dialog skin, similar to modern raid-utility addons)
+------------------------------------------------------------
+local function StyleDarkButton(btn, w, h)
+  if w then btn:SetSize(w, h or 22) end
+  -- Hide the default UIPanelButton textures (3.3.5-safe: SetAlpha, not SetTexture(nil))
+  local nt = btn:GetNormalTexture()
+  if nt then nt:SetAlpha(0) end
+  local pt = btn:GetPushedTexture()
+  if pt then pt:SetAlpha(0) end
+  local ht = btn:GetHighlightTexture()
+  if ht then ht:SetAlpha(0) end
+  local dt = btn:GetDisabledTexture()
+  if dt then dt:SetAlpha(0) end
+
+  if not btn._rpmBg then
+    btn._rpmBg = btn:CreateTexture(nil, "BACKGROUND")
+    btn._rpmBg:SetAllPoints()
+    btn._rpmBg:SetTexture("Interface\\Buttons\\WHITE8x8")
+    btn._rpmBg:SetVertexColor(0.16, 0.16, 0.19, 1)
+  end
+  if not btn._rpmBorder then
+    btn._rpmBorder = CreateFrame("Frame", nil, btn)
+    btn._rpmBorder:SetAllPoints()
+    btn._rpmBorder:SetBackdrop({
+      edgeFile = "Interface\\Buttons\\WHITE8x8",
+      edgeSize = 1,
+    })
+    btn._rpmBorder:SetBackdropBorderColor(0.38, 0.38, 0.42, 1)
+  end
+  local fs = btn:GetFontString()
+  if fs then
+    fs:SetTextColor(0.92, 0.92, 0.92)
+    fs:SetShadowOffset(0, 0)
+  end
+
+  btn:HookScript("OnEnter", function(self)
+    if self:IsEnabled() and self._rpmBg then self._rpmBg:SetVertexColor(0.24, 0.24, 0.28, 1) end
+  end)
+  btn:HookScript("OnLeave", function(self)
+    if self:IsEnabled() and self._rpmBg then self._rpmBg:SetVertexColor(0.16, 0.16, 0.19, 1) end
+  end)
+  btn:HookScript("OnMouseDown", function(self)
+    if self._rpmBg then self._rpmBg:SetVertexColor(0.10, 0.10, 0.12, 1) end
+  end)
+  btn:HookScript("OnMouseUp", function(self)
+    if self:IsEnabled() and self._rpmBg then self._rpmBg:SetVertexColor(0.24, 0.24, 0.28, 1) end
+  end)
+  btn:HookScript("OnDisable", function(self)
+    if self._rpmBg then self._rpmBg:SetVertexColor(0.10, 0.10, 0.11, 0.7) end
+    local f = self:GetFontString()
+    if f then f:SetTextColor(0.45, 0.45, 0.45) end
+  end)
+  btn:HookScript("OnEnable", function(self)
+    if self._rpmBg then self._rpmBg:SetVertexColor(0.16, 0.16, 0.19, 1) end
+    local f = self:GetFontString()
+    if f then f:SetTextColor(0.92, 0.92, 0.92) end
+  end)
+end
+
+local function StyleDarkEditBox(box)
+  for _, r in ipairs({ box:GetRegions() }) do
+    if r.GetObjectType and r:GetObjectType() == "Texture" then r:SetAlpha(0) end
+  end
+  box:SetBackdrop({
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    tile = false,
+    edgeSize = 1,
+    insets = { left = 6, right = 6, top = 4, bottom = 4 },
+  })
+  box:SetBackdropColor(0.12, 0.12, 0.14, 1)
+  box:SetBackdropBorderColor(0.32, 0.32, 0.36, 1)
+  box:SetTextColor(0.95, 0.95, 0.95)
+  box:SetFontObject("GameFontHighlight")
+  box:SetTextInsets(6, 6, 0, 0)
+end
 
 ------------------------------------------------------------
 -- Main frame
 ------------------------------------------------------------
 local frame = CreateFrame("Frame", "RaidPlusMinusFrame", UIParent)
-frame:SetSize(300, 446)
+frame:SetSize(300, 446 + TAB_BAR_HEIGHT)
 frame:SetPoint("CENTER")
 frame:SetMovable(true)
 frame:EnableMouse(true)
@@ -42,65 +130,150 @@ frame:RegisterForDrag("LeftButton")
 frame:SetScript("OnDragStart", frame.StartMoving)
 frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 frame:SetBackdrop({
-  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-  tile = true,
-  tileSize = 32,
-  edgeSize = 32,
-  insets = { left = 11, right = 12, top = 12, bottom = 11 },
+  bgFile = "Interface\\Buttons\\WHITE8x8",
+  edgeFile = "Interface\\Buttons\\WHITE8x8",
+  tile = false,
+  tileSize = 0,
+  edgeSize = 1,
+  insets = { left = 1, right = 1, top = 1, bottom = 1 },
 })
+frame:SetBackdropColor(0.07, 0.07, 0.09, 0.97)
+frame:SetBackdropBorderColor(0.28, 0.28, 0.32, 1)
 frame:SetFrameStrata("HIGH")
 frame:Hide()
 
 tinsert(UISpecialFrames, "RaidPlusMinusFrame")
 
+------------------------------------------------------------
+-- Minimap button
+------------------------------------------------------------
+local minimapButton = CreateFrame("Button", "RaidPlusMinusMinimapButton", Minimap)
+minimapButton:SetSize(31, 31)
+minimapButton:SetFrameStrata("MEDIUM")
+minimapButton:SetFrameLevel(8)
+minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
+local minimapButtonIcon = minimapButton:CreateTexture(nil, "BACKGROUND")
+minimapButtonIcon:SetTexture("Interface\\AddOns\\RaidPlusMinus\\Media\\raid_plus_minus")
+minimapButtonIcon:SetSize(20, 20)
+minimapButtonIcon:SetPoint("CENTER", 0, 0)
+minimapButtonIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+
+local minimapButtonBorder = minimapButton:CreateTexture(nil, "OVERLAY")
+minimapButtonBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+minimapButtonBorder:SetSize(54, 54)
+minimapButtonBorder:SetPoint("TOPLEFT", 0, 0)
+
+function UpdateMinimapButtonPosition()
+  local angle = math.rad(RaidPlusMinusDB.minimap and RaidPlusMinusDB.minimap.angle or 200)
+  local radius = 80
+  minimapButton:ClearAllPoints()
+  minimapButton:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
+end
+
+minimapButton:RegisterForDrag("LeftButton")
+minimapButton:RegisterForClicks("LeftButtonUp")
+
+minimapButton:SetScript("OnDragStart", function(self)
+  self:SetScript("OnUpdate", function(self)
+    local mx, my = Minimap:GetCenter()
+    local px, py = GetCursorPosition()
+    local scale = Minimap:GetEffectiveScale()
+    px, py = px / scale, py / scale
+    local angle = math.deg(math.atan2(py - my, px - mx))
+    RaidPlusMinusDB.minimap.angle = angle
+    UpdateMinimapButtonPosition()
+  end)
+end)
+
+minimapButton:SetScript("OnDragStop", function(self)
+  self:SetScript("OnUpdate", nil)
+end)
+
+minimapButton:SetScript("OnClick", function()
+  ToggleMainWindow()
+end)
+
+minimapButton:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+  GameTooltip:AddLine("Raid +/-")
+  GameTooltip:AddLine(L["MINIMAP_TOOLTIP_OPEN"] or "Left-click to open", 1, 1, 1)
+  GameTooltip:AddLine(L["MINIMAP_TOOLTIP_MOVE"] or "Drag to move", 1, 1, 1)
+  GameTooltip:Show()
+end)
+
+minimapButton:SetScript("OnLeave", function()
+  GameTooltip:Hide()
+end)
+
 local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-title:SetPoint("TOP", 0, -16)
+title:SetPoint("TOP", 0, -14)
 title:SetText("Raid +/-")
+title:SetTextColor(1, 0.82, 0.0)
 
 local closeBtn = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-closeBtn:SetPoint("TOPRIGHT", -4, -4)
+closeBtn:SetPoint("TOPRIGHT", -2, -2)
+closeBtn:SetScale(0.9)
 
 frame.syncStatus = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 frame.syncStatus:SetPoint("TOPLEFT", 20, -20)
 frame.syncStatus:SetText("")
+frame.syncStatus:SetTextColor(0.55, 0.55, 0.6)
+
+local tabPlayersBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+tabPlayersBtn:SetPoint("TOPLEFT", 16, -20 - TAB_BAR_HEIGHT)
+tabPlayersBtn:SetText(L["TAB_PLAYERS"])
+StyleDarkButton(tabPlayersBtn, 90, 20)
+
+local tabHistoryBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+tabHistoryBtn:SetPoint("LEFT", tabPlayersBtn, "RIGHT", 4, 0)
+tabHistoryBtn:SetText(L["TAB_HISTORY"])
+StyleDarkButton(tabHistoryBtn, 90, 20)
+
+tabPlayersBtn:SetScript("OnClick", function() SetActiveTab("players") end)
+tabHistoryBtn:SetScript("OnClick", function() SetActiveTab("history") end)
 
 frame.emptyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 frame.emptyText:SetPoint("CENTER", 0, 20)
 frame.emptyText:SetText(L["EMPTY_TEXT"])
+frame.emptyText:SetTextColor(0.55, 0.55, 0.6)
 frame.emptyText:Hide()
 
 local headerName = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerName:SetPoint("TOPLEFT", 24, -64)
+headerName:SetPoint("TOPLEFT", 24, -64 - TAB_BAR_HEIGHT)
 headerName:SetText(L["HEADER_PLAYER"])
+headerName:SetTextColor(0.7, 0.7, 0.75)
 
 local headerScore = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 headerScore:SetPoint("LEFT", headerName, "RIGHT", 122, 0)
 headerScore:SetText(L["HEADER_SCORE"])
+headerScore:SetTextColor(0.7, 0.7, 0.75)
 
 ------------------------------------------------------------
 -- Manual add by nickname (no need to be in a raid/see the player
 -- in the list — useful if right-click/menu doesn't work)
 ------------------------------------------------------------
 local addNameLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-addNameLabel:SetPoint("TOPLEFT", 24, -42)
+addNameLabel:SetPoint("TOPLEFT", 24, -42 - TAB_BAR_HEIGHT)
 addNameLabel:SetText(L["ADD_NAME_LABEL"])
+addNameLabel:SetTextColor(0.75, 0.75, 0.8)
 
 local addNameBox = CreateFrame("EditBox", "RaidPlusMinusAddNameBox", frame, "InputBoxTemplate")
 addNameBox:SetSize(110, 20)
 addNameBox:SetPoint("LEFT", addNameLabel, "RIGHT", 8, 0)
 addNameBox:SetAutoFocus(false)
 addNameBox:SetMaxLetters(24)
+StyleDarkEditBox(addNameBox)
 
 local addPlusBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-addPlusBtn:SetSize(24, 20)
 addPlusBtn:SetText("+")
 addPlusBtn:SetPoint("LEFT", addNameBox, "RIGHT", 6, 0)
+StyleDarkButton(addPlusBtn, 24, 20)
 
 local addMinusBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-addMinusBtn:SetSize(24, 20)
 addMinusBtn:SetText("-")
 addMinusBtn:SetPoint("LEFT", addPlusBtn, "RIGHT", 4, 0)
+StyleDarkButton(addMinusBtn, 24, 20)
 
 local function ManualAddClick(sign)
   local name = strtrim(addNameBox:GetText() or "")
@@ -117,17 +290,37 @@ addNameBox:SetScript("OnEnterPressed", function() ManualAddClick(1) end)
 addNameBox:SetScript("OnEscapePressed", function() addNameBox:ClearFocus() end)
 
 local scrollFrame = CreateFrame("ScrollFrame", "RaidPlusMinusScrollFrame", frame, "UIPanelScrollFrameTemplate")
-scrollFrame:SetPoint("TOPLEFT", 16, -80)
+scrollFrame:SetPoint("TOPLEFT", 16, -80 - TAB_BAR_HEIGHT)
 scrollFrame:SetPoint("BOTTOMRIGHT", -30, 70)
 
 local content = CreateFrame("Frame", nil, scrollFrame)
 content:SetSize(1, 1)
 scrollFrame:SetScrollChild(content)
 
+------------------------------------------------------------
+-- History tab (global feed of who did what, when — separate
+-- from the per-row "mini history" expand on the Players tab)
+------------------------------------------------------------
+local historyScrollFrame = CreateFrame("ScrollFrame", "RaidPlusMinusHistoryScrollFrame", frame,
+  "UIPanelScrollFrameTemplate")
+historyScrollFrame:SetPoint("TOPLEFT", 16, -80 - TAB_BAR_HEIGHT)
+historyScrollFrame:SetPoint("BOTTOMRIGHT", -30, 70)
+historyScrollFrame:Hide()
+
+local historyContent = CreateFrame("Frame", nil, historyScrollFrame)
+historyContent:SetSize(1, 1)
+historyScrollFrame:SetScrollChild(historyContent)
+
+local historyEmptyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+historyEmptyText:SetPoint("CENTER", 0, 20)
+historyEmptyText:SetText(L["HISTORY_EMPTY"])
+historyEmptyText:SetTextColor(0.55, 0.55, 0.6)
+historyEmptyText:Hide()
+
 local sortBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-sortBtn:SetSize(74, 20)
 sortBtn:SetPoint("BOTTOMLEFT", 16, 40)
 sortBtn:SetText(L["SORT_BY_SCORE"])
+StyleDarkButton(sortBtn, 74, 20)
 sortBtn:SetScript("OnClick", function(self)
   if RaidPlusMinusDB.sort == "score" then
     RaidPlusMinusDB.sort = "name"
@@ -140,9 +333,9 @@ sortBtn:SetScript("OnClick", function(self)
 end)
 
 local resetBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-resetBtn:SetSize(52, 20)
 resetBtn:SetPoint("LEFT", sortBtn, "RIGHT", 6, 0)
 resetBtn:SetText(L["BTN_RESET"])
+StyleDarkButton(resetBtn, 52, 20)
 resetBtn:SetScript("OnClick", function()
   if not CanEdit() then
     UIErrorsFrame:AddMessage(L["ERR_RESET_PERM"], 1, 0.2, 0.2)
@@ -152,9 +345,9 @@ resetBtn:SetScript("OnClick", function()
 end)
 
 local syncBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-syncBtn:SetSize(62, 20)
 syncBtn:SetPoint("LEFT", resetBtn, "RIGHT", 6, 0)
 syncBtn:SetText(L["BTN_SYNC"])
+StyleDarkButton(syncBtn, 62, 20)
 syncBtn:SetScript("OnClick", function()
   if not CanEdit() then
     UIErrorsFrame:AddMessage(L["ERR_SYNC_PERM"], 1, 0.2, 0.2)
@@ -165,28 +358,35 @@ syncBtn:SetScript("OnClick", function()
 end)
 
 local chatBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-chatBtn:SetSize(46, 20)
 chatBtn:SetPoint("LEFT", syncBtn, "RIGHT", 6, 0)
 chatBtn:SetText(L["BTN_CHAT"])
+StyleDarkButton(chatBtn, 46, 20)
 chatBtn:SetScript("OnClick", function()
   PostMinusesToChat()
 end)
 
 local exportBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-exportBtn:SetSize(70, 20)
 exportBtn:SetPoint("BOTTOMLEFT", 16, 14)
 exportBtn:SetText(L["BTN_EXPORT"])
+StyleDarkButton(exportBtn, 70, 20)
 exportBtn:SetScript("OnClick", function()
   StaticPopup_Show("RPM_EXPORT")
 end)
 
 local importBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-importBtn:SetSize(70, 20)
 importBtn:SetPoint("LEFT", exportBtn, "RIGHT", 6, 0)
 importBtn:SetText(L["BTN_IMPORT"])
+StyleDarkButton(importBtn, 70, 20)
 importBtn:SetScript("OnClick", function()
   StaticPopup_Show("RPM_IMPORT")
 end)
+
+-- Widgets that only make sense on the Players tab — hidden while History
+-- tab is active (frame.emptyText / historyEmptyText are toggled separately).
+local playersTabWidgets = {
+  headerName, headerScore, addNameLabel, addNameBox, addPlusBtn, addMinusBtn,
+  scrollFrame, sortBtn, resetBtn, syncBtn, chatBtn, exportBtn, importBtn,
+}
 
 ------------------------------------------------------------
 -- Input window (used for both "add plus" and "add minus")
@@ -201,26 +401,31 @@ inputFrame:RegisterForDrag("LeftButton")
 inputFrame:SetScript("OnDragStart", inputFrame.StartMoving)
 inputFrame:SetScript("OnDragStop", inputFrame.StopMovingOrSizing)
 inputFrame:SetBackdrop({
-  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-  tile = true,
-  tileSize = 32,
-  edgeSize = 32,
-  insets = { left = 11, right = 12, top = 12, bottom = 11 },
+  bgFile = "Interface\\Buttons\\WHITE8x8",
+  edgeFile = "Interface\\Buttons\\WHITE8x8",
+  tile = false,
+  tileSize = 0,
+  edgeSize = 1,
+  insets = { left = 1, right = 1, top = 1, bottom = 1 },
 })
+inputFrame:SetBackdropColor(0.07, 0.07, 0.09, 0.97)
+inputFrame:SetBackdropBorderColor(0.28, 0.28, 0.32, 1)
 inputFrame:Hide()
 tinsert(UISpecialFrames, "RaidPlusMinusInputFrame")
 
 inputFrame.title = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-inputFrame.title:SetPoint("TOP", 0, -16)
+inputFrame.title:SetPoint("TOP", 0, -14)
 inputFrame.title:SetText(L["ACTION_ADD_PLUS"])
+inputFrame.title:SetTextColor(1, 0.82, 0.0)
 
 inputFrame.playerLabel = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-inputFrame.playerLabel:SetPoint("TOP", 0, -42)
+inputFrame.playerLabel:SetPoint("TOP", 0, -40)
+inputFrame.playerLabel:SetTextColor(0.9, 0.9, 0.95)
 
 local valueLabel = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 valueLabel:SetPoint("TOPLEFT", 24, -70)
 valueLabel:SetText(L["INPUT_VALUE_LABEL"])
+valueLabel:SetTextColor(0.75, 0.75, 0.8)
 
 inputFrame.valueBox = CreateFrame("EditBox", "RaidPlusMinusValueBox", inputFrame, "InputBoxTemplate")
 inputFrame.valueBox:SetSize(50, 20)
@@ -228,21 +433,24 @@ inputFrame.valueBox:SetPoint("LEFT", valueLabel, "RIGHT", 10, 0)
 inputFrame.valueBox:SetAutoFocus(false)
 inputFrame.valueBox:SetNumeric(true)
 inputFrame.valueBox:SetMaxLetters(4)
+StyleDarkEditBox(inputFrame.valueBox)
 
 local noteLabel = inputFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 noteLabel:SetPoint("TOPLEFT", 24, -100)
 noteLabel:SetText(L["INPUT_NOTE_LABEL"])
+noteLabel:SetTextColor(0.75, 0.75, 0.8)
 
 inputFrame.noteBox = CreateFrame("EditBox", "RaidPlusMinusNoteBox", inputFrame, "InputBoxTemplate")
 inputFrame.noteBox:SetSize(160, 20)
 inputFrame.noteBox:SetPoint("LEFT", noteLabel, "RIGHT", 10, 0)
 inputFrame.noteBox:SetAutoFocus(false)
 inputFrame.noteBox:SetMaxLetters(60)
+StyleDarkEditBox(inputFrame.noteBox)
 
 local okBtn = CreateFrame("Button", nil, inputFrame, "UIPanelButtonTemplate")
-okBtn:SetSize(70, 20)
 okBtn:SetPoint("BOTTOMLEFT", 30, 14)
 okBtn:SetText("OK")
+StyleDarkButton(okBtn, 70, 20)
 okBtn:SetScript("OnClick", function()
   local amount = tonumber(inputFrame.valueBox:GetText())
   if not amount or amount <= 0 then
@@ -256,7 +464,7 @@ okBtn:SetScript("OnClick", function()
   -- broadcast failure (SendComm already protects itself with pcall,
   -- but just in case) can't interfere with the visible result.
   local ok, err = pcall(AddChange, targetName, delta, note)
-  BuildPlayerList()
+  RefreshWindow()
   inputFrame:Hide()
   if not ok then
     DEFAULT_CHAT_FRAME:AddMessage("|cffff3333Raid +/-:|r " .. L["ERR_GENERIC"]:format(tostring(err)))
@@ -264,12 +472,16 @@ okBtn:SetScript("OnClick", function()
 end)
 
 local cancelBtn = CreateFrame("Button", nil, inputFrame, "UIPanelButtonTemplate")
-cancelBtn:SetSize(70, 20)
 cancelBtn:SetPoint("BOTTOMRIGHT", -30, 14)
 cancelBtn:SetText(L["BTN_CANCEL"])
+StyleDarkButton(cancelBtn, 70, 20)
 cancelBtn:SetScript("OnClick", function() inputFrame:Hide() end)
 
-CreateFrame("Button", nil, inputFrame, "UIPanelCloseButton"):SetPoint("TOPRIGHT", -4, -4)
+do
+  local inputCloseBtn = CreateFrame("Button", nil, inputFrame, "UIPanelCloseButton")
+  inputCloseBtn:SetPoint("TOPRIGHT", -2, -2)
+  inputCloseBtn:SetScale(0.9)
+end
 
 inputFrame.valueBox:SetScript("OnEnterPressed", function() inputFrame.noteBox:SetFocus() end)
 inputFrame.valueBox:SetScript("OnEscapePressed", function() inputFrame:Hide() end)
@@ -316,13 +528,13 @@ StaticPopupDialogs["RPM_IMPORT"] = {
   editBoxWidth = 350,
   OnAccept = function(self)
     ImportScores(self.editBox:GetText())
-    BuildPlayerList()
+    RefreshWindow()
     if CanEdit() then BroadcastFullSync() end
   end,
   EditBoxOnEnterPressed = function(self)
     local dialog = self:GetParent()
     ImportScores(self:GetText())
-    BuildPlayerList()
+    RefreshWindow()
     if CanEdit() then BroadcastFullSync() end
     dialog:Hide()
   end,
@@ -342,7 +554,8 @@ StaticPopupDialogs["RPM_RESET"] = {
         error(L["MSG_NO_PERMISSION"])
       end
       RaidPlusMinusDB.players = {}
-      BuildPlayerList()
+      RaidPlusMinusDB.globalLog = {}
+      RefreshWindow()
       BroadcastReset()
     end)
     if ok then
@@ -369,6 +582,7 @@ local MAX_SCORE = 9999
 local MAX_DELTA = 999
 local MAX_PLAYERS = 300
 local MAX_HISTORY = 30
+local GLOBAL_LOG_LIMIT = 200
 
 -- Only reject what's actually unsafe: not a string, empty, too long, or
 -- containing the wire-format delimiters (":", ";") which would corrupt
@@ -405,12 +619,26 @@ EnsurePlayer = function(name)
   return RaidPlusMinusDB.players[name]
 end
 
-local function RecordHistory(p, delta, reason, author, changeTime)
+-- Appends to both the per-player history (capped at MAX_HISTORY, used by
+-- the row tooltip/mini-history) and a single shared, already-newest-first
+-- log (capped at GLOBAL_LOG_LIMIT, used by the History tab) so the tab
+-- doesn't need to re-scan and sort every player's history on every render.
+local function RecordHistory(name, p, delta, reason, author, changeTime)
   reason = (reason or ""):sub(1, MAX_NOTE_LEN)
   table.insert(p.history, { delta = delta, reason = reason, time = changeTime, author = author })
   if #p.history > MAX_HISTORY then
     table.remove(p.history, 1)
   end
+
+  if type(RaidPlusMinusDB.globalLog) ~= "table" then
+    RaidPlusMinusDB.globalLog = {}
+  end
+  table.insert(RaidPlusMinusDB.globalLog, 1,
+    { name = name, delta = delta, reason = reason, time = changeTime, author = author })
+  if #RaidPlusMinusDB.globalLog > GLOBAL_LOG_LIMIT then
+    table.remove(RaidPlusMinusDB.globalLog)
+  end
+
   return reason
 end
 
@@ -423,7 +651,7 @@ AddChange = function(name, delta, reason)
   p.score = ClampNumber(p.score + delta, MAX_SCORE)
   local author = UnitName("player")
   local changeTime = time()
-  reason = RecordHistory(p, delta, reason, author, changeTime)
+  reason = RecordHistory(name, p, delta, reason, author, changeTime)
   BroadcastChange(name, delta, reason, author, changeTime)
 end
 
@@ -433,8 +661,8 @@ ApplyRemoteChange = function(name, delta, reason, author, changeTime)
   if not p then return end
   delta = ClampNumber(delta, MAX_DELTA)
   p.score = ClampNumber(p.score + delta, MAX_SCORE)
-  RecordHistory(p, delta, reason, author, tonumber(changeTime) or time())
-  if frame:IsShown() then BuildPlayerList() end
+  RecordHistory(name, p, delta, reason, author, tonumber(changeTime) or time())
+  RefreshWindow()
 end
 
 -- UnitIsGroupLeader/UnitIsGroupAssistant can throw an error on some
@@ -452,38 +680,55 @@ local function SafeUnitIsGroupAssistant(unit)
   return false
 end
 
+-- Wrapped in pcall: GetNumRaidMembers/GetRaidRosterInfo have been observed
+-- to throw on some modified/private servers, and a raw error here would
+-- otherwise break every other addon's raid-frame right-click menu too
+-- (see the ToggleDropDownMenu/UnitPopup_ShowMenu hooks below).
 CanEdit = function()
-  if GetNumRaidMembers() == 0 and GetNumPartyMembers() == 0 then
-    return true
-  end
-  -- Primary, reliable path — the raw rank field from GetRaidRosterInfo.
-  if IsOfficerName(UnitName("player")) then
-    return true
-  end
-  -- Fallback path for a party (not raid), where there's no rank.
-  return SafeUnitIsGroupLeader("player") or SafeUnitIsGroupAssistant("player")
+  local ok, result = pcall(function()
+    local numRaid = GetNumRaidMembers() or 0
+    local numParty = GetNumPartyMembers() or 0
+    if numRaid == 0 and numParty == 0 then
+      return true
+    end
+    -- Primary, reliable path — the raw rank field from GetRaidRosterInfo.
+    local myName = UnitName("player")
+    if myName and IsOfficerName(myName) then
+      return true
+    end
+    -- Fallback path for a party (not raid), where there's no rank.
+    return SafeUnitIsGroupLeader("player") or SafeUnitIsGroupAssistant("player")
+  end)
+  if ok then return result end
+  return false
 end
 
 IsOfficerName = function(name)
-  local numRaid = GetNumRaidMembers()
-  if numRaid > 0 then
-    for i = 1, numRaid do
-      local n, rank = GetRaidRosterInfo(i)
-      if n == name then
-        return rank and rank >= 1
+  if not name or name == "" then return false end
+  local ok, result = pcall(function()
+    local numRaid = GetNumRaidMembers() or 0
+    if numRaid > 0 then
+      for i = 1, numRaid do
+        local n, rank = GetRaidRosterInfo(i)
+        if n == name then
+          return rank and rank >= 1
+        end
+      end
+      return false
+    end
+    if name == UnitName("player") then
+      return SafeUnitIsGroupLeader("player") or (GetNumPartyMembers() or 0) == 0
+    end
+    local numParty = GetNumPartyMembers() or 0
+    for i = 1, numParty do
+      local unit = "party" .. i
+      if UnitExists(unit) and UnitName(unit) == name then
+        return SafeUnitIsGroupLeader(unit)
       end
     end
     return false
-  end
-  if name == UnitName("player") then
-    return SafeUnitIsGroupLeader("player") or GetNumPartyMembers() == 0
-  end
-  for i = 1, GetNumPartyMembers() do
-    local unit = "party" .. i
-    if UnitExists(unit) and UnitName(unit) == name then
-      return SafeUnitIsGroupLeader(unit)
-    end
-  end
+  end)
+  if ok then return result end
   return false
 end
 
@@ -610,12 +855,44 @@ end
 ------------------------------------------------------------
 -- Chat report
 ------------------------------------------------------------
+-- SendChatMessage calls fired back-to-back in a tight loop get silently
+-- throttled/dropped by the server once a raid has more than a handful of
+-- scored players, so lines are queued here and drained one at a time on
+-- a short timer instead of all at once.
+local chatQueue = {}
+local CHAT_SEND_INTERVAL = 0.3
+local chatQueueElapsed = 0
+local chatQueueFrame = CreateFrame("Frame")
+chatQueueFrame:Hide()
+chatQueueFrame:SetScript("OnUpdate", function(self, elapsed)
+  chatQueueElapsed = chatQueueElapsed + elapsed
+  if chatQueueElapsed < CHAT_SEND_INTERVAL then return end
+  chatQueueElapsed = 0
+
+  local item = table.remove(chatQueue, 1)
+  if not item then
+    self:Hide()
+    return
+  end
+  if item.channel then
+    SendChatMessage(item.text, item.channel)
+  else
+    DEFAULT_CHAT_FRAME:AddMessage(item.text)
+  end
+end)
+
+local function QueueChatLine(text, channel)
+  table.insert(chatQueue, { text = text, channel = channel })
+  chatQueueFrame:Show()
+end
+
 PostMinusesToChat = function()
   local channel = GetCommChannel()
 
   local names = {}
   for name, data in pairs(RaidPlusMinusDB.players) do
-    if data.history and #data.history > 0 then
+    -- Skip players whose changes net out to 0 — nothing meaningful to report.
+    if data.history and #data.history > 0 and data.score ~= 0 then
       table.insert(names, name)
     end
   end
@@ -632,15 +909,7 @@ PostMinusesToChat = function()
     return sa > sb     -- descending, highest first
   end)
 
-  local function SendLine(text)
-    if channel then
-      SendChatMessage(text, channel)
-    else
-      DEFAULT_CHAT_FRAME:AddMessage(text)
-    end
-  end
-
-  SendLine(L["CHAT_REPORT_LABEL"])
+  QueueChatLine(L["CHAT_REPORT_LABEL"], channel)
   for _, name in ipairs(names) do
     local p = RaidPlusMinusDB.players[name]
     local line = name .. " - " .. FormatScore(p.score)
@@ -655,7 +924,7 @@ PostMinusesToChat = function()
       line = line .. " (" .. table.concat(notes, ", ") .. ")"
     end
 
-    SendLine(line)
+    QueueChatLine(line, channel)
   end
 end
 
@@ -666,16 +935,22 @@ end
 local rowDropDown = CreateFrame("Frame", "RaidPlusMinusRowDropDown", UIParent, "UIDropDownMenuTemplate")
 
 local function AddPlusMinusMenuButtons(level, uName)
-  local infoPlus = UIDropDownMenu_CreateInfo()
-  infoPlus.text = L["ACTION_ADD_PLUS"]
-  infoPlus.notCheckable = true
-  infoPlus.func = function() OpenInputWindow(uName, 1) end
+  -- Plain tables instead of the shared UIDropDownMenu_CreateInfo() table:
+  -- on 3.3.5 that shared table gets wiped by CreateInfo() on every call,
+  -- so the second button here could lose its text (or fail to appear at
+  -- all) when another unit-frame addon (X-Perl etc.) touches it in between.
+  local infoPlus = {
+    text = L["ACTION_ADD_PLUS"],
+    notCheckable = true,
+    func = function() OpenInputWindow(uName, 1) end,
+  }
   UIDropDownMenu_AddButton(infoPlus, level)
 
-  local infoMinus = UIDropDownMenu_CreateInfo()
-  infoMinus.text = L["ACTION_ADD_MINUS"]
-  infoMinus.notCheckable = true
-  infoMinus.func = function() OpenInputWindow(uName, -1) end
+  local infoMinus = {
+    text = L["ACTION_ADD_MINUS"],
+    notCheckable = true,
+    func = function() OpenInputWindow(uName, -1) end,
+  }
   UIDropDownMenu_AddButton(infoMinus, level)
 end
 
@@ -694,7 +969,10 @@ GetRow = function(i)
 
   local row = CreateFrame("Frame", nil, content)
   row:SetSize(250, ROW_HEIGHT)
-  row:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
+  -- Positioned fresh on every BuildPlayerList() call instead of a fixed
+  -- offset here, since rows can have variable height once a mini-history
+  -- panel is expanded.
+  row:SetPoint("TOPLEFT", 0, 0)
 
   row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   row.name:SetPoint("LEFT", 4, 0)
@@ -707,14 +985,28 @@ GetRow = function(i)
   row.score:SetJustifyH("CENTER")
 
   row.minus = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-  row.minus:SetSize(20, 18)
   row.minus:SetText("-")
   row.minus:SetPoint("LEFT", row.score, "RIGHT", 6, 0)
+  StyleDarkButton(row.minus, 20, 18)
 
   row.plus = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-  row.plus:SetSize(20, 18)
   row.plus:SetText("+")
   row.plus:SetPoint("LEFT", row.minus, "RIGHT", 4, 0)
+  StyleDarkButton(row.plus, 20, 18)
+
+  -- Expand/collapse the mini-history panel for this player (hidden
+  -- entirely when the player has no recorded history).
+  row.expandBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  row.expandBtn:SetText(">")
+  row.expandBtn:SetPoint("LEFT", row.plus, "RIGHT", 4, 0)
+  StyleDarkButton(row.expandBtn, 18, 18)
+  row.expandBtn:SetScript("OnClick", function()
+    local name = row.playerName
+    if not name then return end
+    expandedPlayers[name] = not expandedPlayers[name]
+    RefreshWindow()
+  end)
+  row.historyLines = {}
 
   row.nameBtn = CreateFrame("Button", nil, row)
   row.nameBtn:SetAllPoints(row.name)
@@ -765,7 +1057,7 @@ GetRow = function(i)
       OpenInputWindow(name, -1)
     else
       AddChange(name, -1)
-      BuildPlayerList()
+      RefreshWindow()
     end
   end)
 
@@ -776,12 +1068,57 @@ GetRow = function(i)
       OpenInputWindow(name, 1)
     else
       AddChange(name, 1)
-      BuildPlayerList()
+      RefreshWindow()
     end
   end)
 
   rows[i] = row
   return row
+end
+
+-- Shows/hides and lays out the (up to HISTORY_MINI_LIMIT) mini-history
+-- lines below a row, most-recent first. Returns the total height the row
+-- should occupy (base row height, plus history lines if expanded).
+local function UpdateRowHistoryPanel(row, name)
+  local p = RaidPlusMinusDB.players[name]
+  local history = p and p.history
+  local total = history and #history or 0
+
+  if total == 0 then
+    row.expandBtn:Hide()
+    for _, fs in ipairs(row.historyLines) do fs:Hide() end
+    return ROW_HEIGHT
+  end
+
+  row.expandBtn:Show()
+  local expanded = expandedPlayers[name] == true
+  row.expandBtn:SetText(expanded and "v" or ">")
+
+  if not expanded then
+    for _, fs in ipairs(row.historyLines) do fs:Hide() end
+    return ROW_HEIGHT
+  end
+
+  local shown = math.min(total, HISTORY_MINI_LIMIT)
+  for slot = 1, shown do
+    local entry = history[total - slot + 1]
+    local fs = row.historyLines[slot]
+    if not fs then
+      fs = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+      fs:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -(slot - 1) * HISTORY_LINE_HEIGHT - 2)
+      fs:SetWidth(230)
+      fs:SetJustifyH("LEFT")
+      row.historyLines[slot] = fs
+    end
+    local noteSuffix = (entry.reason and entry.reason ~= "") and (" (" .. entry.reason .. ")") or ""
+    fs:SetText((entry.author or "?") .. " " .. FormatScore(entry.delta) .. noteSuffix)
+    fs:Show()
+  end
+  for slot = shown + 1, #row.historyLines do
+    row.historyLines[slot]:Hide()
+  end
+
+  return ROW_HEIGHT + shown * HISTORY_LINE_HEIGHT + 4
 end
 
 BuildPlayerList = function()
@@ -792,9 +1129,13 @@ BuildPlayerList = function()
   local names = {}
   local classMap = {}
   for _, entry in ipairs(roster) do
-    EnsurePlayer(entry.name)
-    table.insert(names, entry.name)
-    classMap[entry.name] = entry.class
+    local p = EnsurePlayer(entry.name)
+    -- Only players with an actual plus/minus belong on the main list —
+    -- everyone else is just clutter until they get their first change.
+    if p and p.score ~= 0 then
+      table.insert(names, entry.name)
+      classMap[entry.name] = entry.class
+    end
   end
 
   if RaidPlusMinusDB.sort == "score" then
@@ -808,8 +1149,10 @@ BuildPlayerList = function()
     table.sort(names)
   end
 
+  local yOffset = 0
   for i, name in ipairs(names) do
     local row = GetRow(i)
+    row:SetPoint("TOPLEFT", 0, -yOffset)
     row.playerName = name
 
     local classColor = RAID_CLASS_COLORS and RAID_CLASS_COLORS[classMap[name]]
@@ -837,16 +1180,24 @@ BuildPlayerList = function()
       row.minus:Disable()
       row.plus:Disable()
     end
+
+    local rowHeight = UpdateRowHistoryPanel(row, name)
+    row:SetHeight(rowHeight)
     row:Show()
+    yOffset = yOffset + rowHeight
   end
 
   for i = #names + 1, #rows do
     rows[i]:Hide()
   end
 
-  content:SetHeight(math.max(1, #names * ROW_HEIGHT))
+  content:SetHeight(math.max(1, yOffset))
 
   if #roster == 0 then
+    frame.emptyText:SetText(L["EMPTY_TEXT"])
+    frame.emptyText:Show()
+  elseif #names == 0 then
+    frame.emptyText:SetText(L["EMPTY_TEXT_NO_SCORES"])
     frame.emptyText:Show()
   else
     frame.emptyText:Hide()
@@ -854,9 +1205,116 @@ BuildPlayerList = function()
 end
 
 ------------------------------------------------------------
+-- History tab (global feed, newest first)
+------------------------------------------------------------
+local HISTORY_ROW_HEIGHT = 16
+local historyRows = {}
+
+local function GetHistoryRow(i)
+  if historyRows[i] then return historyRows[i] end
+  local fs = historyContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  fs:SetPoint("TOPLEFT", 4, -(i - 1) * HISTORY_ROW_HEIGHT)
+  fs:SetWidth(240)
+  fs:SetJustifyH("LEFT")
+  historyRows[i] = fs
+  return fs
+end
+
+local function FormatRelativeTime(entryTime)
+  local diff = time() - (tonumber(entryTime) or time())
+  if diff < 0 then diff = 0 end
+  if diff < 60 then
+    return L["TIME_JUST_NOW"]
+  elseif diff < 3600 then
+    return L["TIME_MINUTES_AGO"]:format(math.floor(diff / 60))
+  elseif diff < 86400 then
+    return L["TIME_HOURS_AGO"]:format(math.floor(diff / 3600))
+  else
+    return L["TIME_DAYS_AGO"]:format(math.floor(diff / 86400))
+  end
+end
+
+BuildHistoryList = function()
+  local log = (type(RaidPlusMinusDB.globalLog) == "table") and RaidPlusMinusDB.globalLog or {}
+  local count = #log
+
+  for i = 1, count do
+    local e = log[i]
+    local row = GetHistoryRow(i)
+    local noteSuffix = (e.reason and e.reason ~= "") and (" (" .. e.reason .. ")") or ""
+    row:SetText(("%s: %s %s%s (%s)"):format(
+      e.author or "?", e.name or "?", FormatScore(e.delta or 0), noteSuffix, FormatRelativeTime(e.time)))
+    row:Show()
+  end
+  for i = count + 1, #historyRows do
+    historyRows[i]:Hide()
+  end
+
+  historyContent:SetHeight(math.max(1, count * HISTORY_ROW_HEIGHT))
+
+  if count == 0 then
+    historyEmptyText:Show()
+  else
+    historyEmptyText:Hide()
+  end
+end
+
+------------------------------------------------------------
+-- Tab switching
+------------------------------------------------------------
+local currentTab = "players"
+
+local function ApplyTabVisibility()
+  local showPlayers = currentTab == "players"
+  for _, widget in ipairs(playersTabWidgets) do
+    if showPlayers then widget:Show() else widget:Hide() end
+  end
+  if showPlayers then
+    historyScrollFrame:Hide()
+    historyEmptyText:Hide()
+  else
+    frame.emptyText:Hide()
+    historyScrollFrame:Show()
+  end
+end
+
+SetActiveTab = function(tab)
+  currentTab = tab
+  ApplyTabVisibility()
+  if tab == "history" then
+    BuildHistoryList()
+  else
+    BuildPlayerList()
+  end
+end
+
+-- Tab-aware "something changed" refresh: rebuilds whichever tab is
+-- currently visible, or just keeps the roster cache warm if the window
+-- is closed (avoids the cost of a full rebuild for a window nobody sees).
+RefreshWindow = function()
+  if not frame:IsShown() then
+    RefreshRosterNameSet()
+    return
+  end
+  if currentTab == "history" then
+    RefreshRosterNameSet()
+    BuildHistoryList()
+  else
+    BuildPlayerList()
+  end
+end
+
+------------------------------------------------------------
 -- Right-click unit context menu integration
--- (standard Blizzard raid frame + a fallback path for
---  ElvUI / oUF-based frames that open the menu differently)
+-- (standard Blizzard raid frame + a careful fallback for
+--  X-Perl / ElvUI / oUF-based frames that open the menu differently)
+--
+-- CRITICAL: the ToggleDropDownMenu hook is GLOBAL — it runs for every
+-- dropdown in the UI. Any uncaught error here (or injecting buttons into
+-- a menu that isn't ours) can break right-click menus on X-Perl raid
+-- frames for everyone, not just this addon. Everything below is
+-- therefore wrapped in pcall, and we only ever touch menus that clearly
+-- belong to a raid/party unit.
 ------------------------------------------------------------
 -- Cached as a set (name -> true) and refreshed only on actual roster-change
 -- events, instead of rescanning the whole raid on every dropdown menu opened
@@ -877,58 +1335,112 @@ local function IsTrackedRosterName(uName)
   return uName ~= nil and rosterNameSet[uName] == true
 end
 
+-- True only for unit tokens we actually care about (raid1..40, party1..4,
+-- player) — keeps us from reacting to random dropdowns that happen to
+-- have a .unit field set for something unrelated.
+local function IsUnitToken(unit)
+  if type(unit) ~= "string" or unit == "" then return false end
+  if unit == "player" then return true end
+  if unit:match("^raid%d+$") then return true end
+  if unit:match("^party%d+$") then return true end
+  return false
+end
+
 -- Guard against adding the buttons twice if the same click goes through
--- both hooked paths at once (e.g. ElvUI internally also calls the
+-- both hooked paths at once (e.g. X-Perl/ElvUI internally also call the
 -- standard UnitPopup_ShowMenu).
 local lastMenuName, lastMenuTime = nil, 0
 
 local function TryInjectButtons(level, uName)
   if not uName or uName == "" then return end
+  -- Officers/RL only — never inject (and never risk the menu) otherwise.
   if not CanEdit() then return end
   if not IsTrackedRosterName(uName) then return end
 
   local now = GetTime()
-  if lastMenuName == uName and (now - lastMenuTime) < 0.2 then
+  if lastMenuName == uName and (now - lastMenuTime) < 0.25 then
     return
   end
   lastMenuName, lastMenuTime = uName, now
 
-  AddPlusMinusMenuButtons(level, uName)
+  -- X-Perl and some other unit-frame addons finish building their menu
+  -- slightly after ToggleDropDownMenu/UnitPopup_ShowMenu returns, which
+  -- could wipe out buttons added synchronously. Waiting one frame and
+  -- confirming the dropdown list is still open makes injection reliable
+  -- there without affecting the default Blizzard menu (which is already
+  -- open by the time this runs).
+  level = level or UIDROPDOWNMENU_MENU_LEVEL or 1
+  local waiter = CreateFrame("Frame")
+  waiter:SetScript("OnUpdate", function(self)
+    self:SetScript("OnUpdate", nil)
+    local listFrame = _G["DropDownList" .. level]
+    if listFrame and listFrame:IsShown() then
+      pcall(AddPlusMinusMenuButtons, level, uName)
+    end
+  end)
 end
 
 -- Path 1: standard Blizzard menu (RAID_PLAYER/PARTY, etc.)
 local function AddCustomMenuButtons(dropdownMenu, which, unit, name, userData)
-  local uName = name
-  if (not uName or uName == "") and unit then
-    uName = UnitName(unit)
+  local ok, err = pcall(function()
+    -- Narrow to group-related popup types when the game tells us the type.
+    if which and which ~= "" then
+      local w = which:upper()
+      if not (w:find("RAID", 1, true) or w:find("PARTY", 1, true)
+          or w == "SELF" or w == "PLAYER" or w == "FRIEND") then
+        return
+      end
+    end
+    local uName = name
+    if (not uName or uName == "") and type(unit) == "string" and unit ~= "" then
+      uName = UnitName(unit)
+    end
+    TryInjectButtons(UIDROPDOWNMENU_MENU_LEVEL or 1, uName)
+  end)
+  if not ok then
+    -- Never let a menu-injection error break the original unit menu.
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff3333Raid +/-:|r " .. L["MSG_MENU_INJECT_ERROR"]:format(tostring(err)))
   end
-  TryInjectButtons(UIDROPDOWNMENU_MENU_LEVEL or 1, uName)
 end
 
 if UnitPopup_ShowMenu then
   hooksecurefunc("UnitPopup_ShowMenu", AddCustomMenuButtons)
 end
 
--- Path 2: a fallback, more generic hook — many oUF-based frameworks
--- (including ElvUI ports for 3.3.5) open the unit menu via
+-- Path 2: a fallback, more generic hook — X-Perl and many oUF-based
+-- frameworks (including ElvUI ports for 3.3.5) open the unit menu via
 -- ToggleDropDownMenu, passing a dropdown frame with .unit or .name
 -- fields (like the standard FriendsDropDown). This path catches those
--- cases even if UnitPopup_ShowMenu isn't called directly.
+-- cases even if UnitPopup_ShowMenu isn't called directly. We only ever
+-- act on a real raid/party unit token, or a .name already in our roster,
+-- so ordinary UI dropdowns (options, minimap, etc.) are never touched.
 if ToggleDropDownMenu then
   hooksecurefunc("ToggleDropDownMenu", function(level, value, dropdownFrame)
-    local ddFrame = dropdownFrame
-    if type(ddFrame) == "string" then
-      ddFrame = _G[ddFrame]
-    end
-    if type(ddFrame) ~= "table" then return end
+    local ok, err = pcall(function()
+      if not CanEdit() then return end
 
-    local uName = ddFrame.name
-    if (not uName or uName == "") and ddFrame.unit and UnitExists(ddFrame.unit) then
-      uName = UnitName(ddFrame.unit)
-    end
-    if not uName then return end
+      local ddFrame = dropdownFrame
+      if type(ddFrame) == "string" then
+        ddFrame = _G[ddFrame]
+      end
+      if type(ddFrame) ~= "table" then return end
 
-    TryInjectButtons(level or UIDROPDOWNMENU_MENU_LEVEL or 1, uName)
+      local unit = ddFrame.unit
+      local uName
+      if IsUnitToken(unit) and UnitExists(unit) then
+        uName = UnitName(unit)
+      elseif type(ddFrame.name) == "string" and ddFrame.name ~= "" then
+        if IsTrackedRosterName(ddFrame.name) then
+          uName = ddFrame.name
+        end
+      end
+      if not uName then return end
+
+      TryInjectButtons(level or UIDROPDOWNMENU_MENU_LEVEL or 1, uName)
+    end)
+    if not ok then
+      DEFAULT_CHAT_FRAME:AddMessage("|cffff3333Raid +/-:|r " .. L["MSG_MENU_INJECT_ERROR"]:format(tostring(err)))
+    end
   end)
 end
 
@@ -1000,9 +1512,16 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     if type(RaidPlusMinusDB.players) ~= "table" then
       RaidPlusMinusDB.players = {}
     end
+    if type(RaidPlusMinusDB.globalLog) ~= "table" then
+      RaidPlusMinusDB.globalLog = {}
+    end
     if not RaidPlusMinusDB.sort then
       RaidPlusMinusDB.sort = "score"
     end
+    if type(RaidPlusMinusDB.minimap) ~= "table" then
+      RaidPlusMinusDB.minimap = { angle = 200 }
+    end
+    UpdateMinimapButtonPosition()
     sortBtn:SetText(RaidPlusMinusDB.sort == "score" and L["SORT_BY_SCORE"] or L["SORT_BY_NAME"])
     RefreshRosterNameSet()
   elseif event == "CHAT_MSG_ADDON" then
@@ -1032,13 +1551,14 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end
           end
         end
-        if frame:IsShown() then BuildPlayerList() end
+        RefreshWindow()
         frame.syncStatus:SetText(L["SYNC_SYNCED"]:format(date("%H:%M")))
       end
     elseif msgType == "R" then
       if IsOfficerName(sender) then
         RaidPlusMinusDB.players = {}
-        if frame:IsShown() then BuildPlayerList() end
+        RaidPlusMinusDB.globalLog = {}
+        RefreshWindow()
         frame.syncStatus:SetText(L["SYNC_RESET_BY"]:format(sender, date("%H:%M")))
       end
     elseif msgType == "RQ" then
@@ -1054,15 +1574,21 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif not inGroup then
       hasRequestedSync = false
     end
-    if frame:IsShown() then
-      BuildPlayerList()
-    else
-      -- BuildPlayerList() also refreshes the roster cache, but skip
-      -- the full rebuild (rows, colors, sort) when the window is hidden.
-      RefreshRosterNameSet()
-    end
+    RefreshWindow()
   end
 end)
+
+------------------------------------------------------------
+-- Window toggle
+------------------------------------------------------------
+function ToggleMainWindow()
+  if frame:IsShown() then
+    frame:Hide()
+  else
+    frame:Show()
+    SetActiveTab(currentTab)
+  end
+end
 
 ------------------------------------------------------------
 -- Slash commands
@@ -1124,7 +1650,7 @@ SlashCmdList["RAIDPLUSMINUS"] = function(msg)
     note = strtrim(note or "")
 
     local ok, err = pcall(AddChange, name, delta, note)
-    BuildPlayerList()
+    RefreshWindow()
     if ok then
       local noteSuffix = (note ~= "" and (" (" .. note .. ")") or "")
       DEFAULT_CHAT_FRAME:AddMessage("|cff33ff33Raid +/-:|r " .. name .. " " .. FormatScore(delta) .. noteSuffix)
@@ -1173,10 +1699,5 @@ SlashCmdList["RAIDPLUSMINUS"] = function(msg)
     return
   end
 
-  if frame:IsShown() then
-    frame:Hide()
-  else
-    frame:Show()
-    BuildPlayerList()
-  end
+  ToggleMainWindow()
 end
