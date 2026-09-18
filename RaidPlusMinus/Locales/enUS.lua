@@ -80,3 +80,13 @@ L["HELP_LINE_ADD_PLUS"] = "/rpm add plus Name [value] [note]"
 L["HELP_LINE_ADD_MINUS"] = "/rpm add minus Name [value] [note]"
 L["HELP_LINE_DEFAULTS"] = "(value and note are optional, default value = 1)"
 L["HELP_LINE_STATUS"] = "/rpm status - show what permissions the addon sees"
+
+-- Undo
+L["BTN_UNDO"] = "Undo"
+L["ERR_UNDO_EMPTY"] = "Nothing to undo"
+L["MSG_UNDONE"] = "Undone: %s %s"
+L["HELP_LINE_UNDO"] = "/rpm undo - undo the latest change"
+
+-- Note presets
+L["PRESETS_PLUS"] = { "Overall", "Prof", "Tank", "Heal", "Last item" }
+L["PRESETS_MINUS"] = { "AFK", "Death", "Dispel", "Spirit", "Bar" }

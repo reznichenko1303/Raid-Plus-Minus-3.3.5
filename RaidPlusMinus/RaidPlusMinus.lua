@@ -1,11 +1,15 @@
 local ADDON_NAME = "RaidPlusMinus"
-local COMM_PREFIX = "RPM1"
+-- Bumped whenever the wire format changes (RPM2: per-player timestamps in
+-- full syncs + undo messages). Clients on a different prefix never see each
+-- other's messages, so mismatched versions can't corrupt each other's data.
+local COMM_PREFIX = "RPM2"
 local L = RaidPlusMinusLocale
 
 ------------------------------------------------------------
 -- Forward declarations
 ------------------------------------------------------------
 local ROW_HEIGHT = 20
+local SCORE_STEP = 5   -- points per click of a row +/- button (and the input dialog default)
 local HISTORY_MINI_LIMIT = 5
 local HISTORY_LINE_HEIGHT = 14
 local TAB_BAR_HEIGHT = 24
@@ -29,6 +33,8 @@ local SendComm
 local BroadcastChange
 local BroadcastFullSync
 local BroadcastReset
+local BroadcastUndo
+local UndoLast
 local RequestSync
 local OpenInputWindow
 local FormatScore
@@ -199,6 +205,43 @@ end
 
 addPlusBtn:SetScript("OnClick", function() ManualAddClick(1) end)
 addMinusBtn:SetScript("OnClick", function() ManualAddClick(-1) end)
+-- Inline name completion: as the user types, fill in the rest of a known
+-- name (roster + everyone we have data for) and leave it selected so
+-- typing on overwrites it, Tab/Enter accepts it.
+local function Utf8Len(str)
+  return select(2, str:gsub("[^\128-\191]", ""))
+end
+
+local function FindNameCompletion(prefix)
+  if prefix == "" then return nil end
+  local lowerPrefix, plen, best = prefix:lower(), #prefix, nil
+  local function consider(name)
+    if #name > plen and name:sub(1, plen):lower() == lowerPrefix and (not best or name < best) then
+      best = name
+    end
+  end
+  for _, entry in ipairs(GetRosterNames()) do consider(entry.name) end
+  for name in pairs(RaidPlusMinusDB.players) do consider(name) end
+  return best
+end
+
+addNameBox:SetScript("OnTextChanged", function(self, userInput)
+  if not userInput then return end
+  local text = self:GetText()
+  local prevLen = self.prevLen or 0
+  self.prevLen = #text
+  if #text <= prevLen then return end  -- deleting: don't fight the user
+  local match = FindNameCompletion(text)
+  if match then
+    self:SetText(match)
+    self:HighlightText(Utf8Len(text), Utf8Len(match))
+    self.prevLen = #match
+  end
+end)
+addNameBox:SetScript("OnTabPressed", function(self)
+  self:HighlightText(0, 0)
+  self:SetCursorPosition(Utf8Len(self:GetText()))
+end)
 addNameBox:SetScript("OnEnterPressed", function() ManualAddClick(1) end)
 addNameBox:SetScript("OnEscapePressed", function() addNameBox:ClearFocus() end)
 
@@ -293,6 +336,15 @@ importBtn:SetScript("OnClick", function()
   StaticPopup_Show("RPM_IMPORT")
 end)
 
+-- History tab only: reverts the newest entry in the feed (shown in
+-- BuildHistoryList, hidden by ApplyTabVisibility on the Players tab).
+local undoBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+undoBtn:SetSize(70, 20)
+undoBtn:SetPoint("BOTTOMLEFT", 16, 14)
+undoBtn:SetText(L["BTN_UNDO"])
+undoBtn:SetScript("OnClick", function() UndoLast() end)
+undoBtn:Hide()
+
 -- Widgets that only make sense on the Players tab — hidden while History
 -- tab is active (frame.emptyText / historyEmptyText are toggled separately).
 local playersTabWidgets = {
@@ -304,7 +356,7 @@ local playersTabWidgets = {
 -- Input window (used for both "add plus" and "add minus")
 ------------------------------------------------------------
 local inputFrame = CreateFrame("Frame", "RaidPlusMinusInputFrame", UIParent)
-inputFrame:SetSize(260, 160)
+inputFrame:SetSize(290, 160)
 inputFrame:SetPoint("CENTER")
 inputFrame:SetFrameStrata("DIALOG")
 inputFrame:SetMovable(true)
@@ -346,10 +398,35 @@ noteLabel:SetPoint("TOPLEFT", 24, -100)
 noteLabel:SetText(L["INPUT_NOTE_LABEL"])
 
 inputFrame.noteBox = CreateFrame("EditBox", "RaidPlusMinusNoteBox", inputFrame, "InputBoxTemplate")
-inputFrame.noteBox:SetSize(160, 20)
+inputFrame.noteBox:SetSize(140, 20)
 inputFrame.noteBox:SetPoint("LEFT", noteLabel, "RIGHT", 10, 0)
 inputFrame.noteBox:SetAutoFocus(false)
 inputFrame.noteBox:SetMaxLetters(60)
+
+-- Ready-made reasons (different lists for plus and minus) so common notes
+-- are one click and spelled the same way every time.
+local presetDropDown = CreateFrame("Frame", "RaidPlusMinusPresetDropDown", inputFrame, "UIDropDownMenuTemplate")
+UIDropDownMenu_Initialize(presetDropDown, function(self, level)
+  local presets = inputFrame.sign and inputFrame.sign > 0 and L["PRESETS_PLUS"] or L["PRESETS_MINUS"]
+  for _, text in ipairs(presets) do
+    UIDropDownMenu_AddButton({
+      text = text,
+      notCheckable = true,
+      func = function()
+        inputFrame.noteBox:SetText(text)
+        inputFrame.noteBox:SetFocus()
+      end,
+    }, level)
+  end
+end, "MENU")
+
+local presetBtn = CreateFrame("Button", nil, inputFrame, "UIPanelButtonTemplate")
+presetBtn:SetSize(22, 20)
+presetBtn:SetText("v")
+presetBtn:SetPoint("LEFT", inputFrame.noteBox, "RIGHT", 4, 0)
+presetBtn:SetScript("OnClick", function(self)
+  ToggleDropDownMenu(1, nil, presetDropDown, self, 0, 0)
+end)
 
 local okBtn = CreateFrame("Button", nil, inputFrame, "UIPanelButtonTemplate")
 okBtn:SetSize(70, 20)
@@ -394,7 +471,7 @@ OpenInputWindow = function(name, sign)
   inputFrame.sign = sign
   inputFrame.title:SetText(sign > 0 and L["ACTION_ADD_PLUS"] or L["ACTION_ADD_MINUS"])
   inputFrame.playerLabel:SetText(name)
-  inputFrame.valueBox:SetText("1")
+  inputFrame.valueBox:SetText(tostring(SCORE_STEP))
   inputFrame.noteBox:SetText("")
   inputFrame:Show()
   inputFrame.valueBox:SetFocus()
@@ -525,6 +602,8 @@ end
 -- doesn't need to re-scan and sort every player's history on every render.
 local function RecordHistory(name, p, delta, reason, author, changeTime)
   reason = (reason or ""):sub(1, MAX_NOTE_LEN)
+  -- Last-change timestamp, used by full syncs to avoid overwriting newer data.
+  p.updated = math.max(p.updated or 0, tonumber(changeTime) or 0)
   table.insert(p.history, { delta = delta, reason = reason, time = changeTime, author = author })
   if #p.history > MAX_HISTORY then
     table.remove(p.history, 1)
@@ -555,14 +634,75 @@ AddChange = function(name, delta, reason)
   BroadcastChange(name, delta, reason, author, changeTime)
 end
 
+local function HasLogEntry(name, delta, author, changeTime)
+  for _, e in ipairs(RaidPlusMinusDB.globalLog) do
+    if e.name == name and e.delta == delta and e.author == author and e.time == changeTime then
+      return true
+    end
+  end
+  return false
+end
+
 ApplyRemoteChange = function(name, delta, reason, author, changeTime)
   if not name or not delta then return end
+  -- Ignore a change we've already applied (duplicate delivery).
+  if HasLogEntry(name, ClampNumber(delta, MAX_DELTA), author, tonumber(changeTime)) then return end
   local p = EnsurePlayer(name)
   if not p then return end
   delta = ClampNumber(delta, MAX_DELTA)
   p.score = ClampNumber(p.score + delta, MAX_SCORE)
   RecordHistory(name, p, delta, reason, author, tonumber(changeTime) or time())
   RefreshWindow()
+end
+
+-- Reverts one logged change: drops it from the global log and the player's
+-- history and subtracts its delta. Returns false if the entry isn't known
+-- locally (already undone, or aged out of the log).
+local function RemoveLogEntry(name, delta, author, changeTime, undoTime)
+  local log = RaidPlusMinusDB.globalLog
+  local idx
+  for i, e in ipairs(log) do
+    if e.name == name and e.delta == delta and e.author == author and e.time == changeTime then
+      idx = i
+      break
+    end
+  end
+  if not idx then return false end
+  table.remove(log, idx)
+
+  local p = RaidPlusMinusDB.players[name]
+  if p then
+    p.score = ClampNumber(p.score - delta, MAX_SCORE)
+    for i = #p.history, 1, -1 do
+      local h = p.history[i]
+      if h.delta == delta and h.author == author and h.time == changeTime then
+        table.remove(p.history, i)
+        break
+      end
+    end
+    p.updated = math.max(p.updated or 0, undoTime or 0)
+  end
+  return true
+end
+
+-- Undoes the newest entry in the shared log (any author) and tells the raid.
+UndoLast = function()
+  if not CanEdit() then
+    UIErrorsFrame:AddMessage(L["ERR_EDIT_PERM"], 1, 0.2, 0.2)
+    return
+  end
+  local e = RaidPlusMinusDB.globalLog[1]
+  if not e then
+    UIErrorsFrame:AddMessage(L["ERR_UNDO_EMPTY"], 1, 0.5, 0)
+    return
+  end
+  local name, delta, author, changeTime = e.name, e.delta, e.author, e.time
+  local undoTime = time()
+  if RemoveLogEntry(name, delta, author, changeTime, undoTime) then
+    BroadcastUndo(name, delta, author, changeTime, undoTime)
+    RefreshWindow()
+    DEFAULT_CHAT_FRAME:AddMessage("|cff33ff33Raid +/-:|r " .. L["MSG_UNDONE"]:format(name, FormatScore(delta)))
+  end
 end
 
 -- UnitIsGroupLeader/UnitIsGroupAssistant can throw an error on some
@@ -678,6 +818,7 @@ ImportScores = function(str)
       local p = EnsurePlayer(name)
       if p then
         p.score = ClampNumber(score, MAX_SCORE)
+        p.updated = time()  -- a fresh import should win the next full sync
       end
     end
   end
@@ -729,19 +870,28 @@ BroadcastReset = function()
   SendComm("R")
 end
 
+BroadcastUndo = function(name, delta, author, changeTime, undoTime)
+  SendComm(string.format("U:%s:%d:%s:%d:%d", name, delta, author, changeTime, undoTime))
+end
+
 BroadcastFullSync = function()
   local names = {}
   for name in pairs(RaidPlusMinusDB.players) do table.insert(names, name) end
   table.sort(names)
 
-  local CHUNK = 10
-  local chunk = {}
+  -- Addon messages are capped at 255 bytes, so pack entries by size
+  -- rather than by count (names are up to 24 bytes, Cyrillic is 2/char).
+  local MAX_LEN = 240
+  local chunk, len = {}, 2
   for _, name in ipairs(names) do
-    table.insert(chunk, name .. ":" .. RaidPlusMinusDB.players[name].score)
-    if #chunk >= CHUNK then
+    local p = RaidPlusMinusDB.players[name]
+    local entry = name .. ":" .. p.score .. ":" .. (p.updated or 0)
+    if #chunk > 0 and len + #entry + 1 > MAX_LEN then
       SendComm("F:" .. table.concat(chunk, ";"))
-      chunk = {}
+      chunk, len = {}, 2
     end
+    table.insert(chunk, entry)
+    len = len + #entry + 1
   end
   if #chunk > 0 then
     SendComm("F:" .. table.concat(chunk, ";"))
@@ -750,6 +900,33 @@ end
 
 RequestSync = function()
   SendComm("RQ")
+end
+
+-- When someone asks for a sync every officer used to answer at once, which
+-- flooded the channel with identical full syncs. Now each officer waits a
+-- random moment and stays quiet if another officer's sync arrives first.
+local syncReplyAt
+local syncReplyFrame = CreateFrame("Frame")
+syncReplyFrame:Hide()
+syncReplyFrame:SetScript("OnUpdate", function(self)
+  if not syncReplyAt then
+    self:Hide()
+  elseif GetTime() >= syncReplyAt then
+    syncReplyAt = nil
+    self:Hide()
+    BroadcastFullSync()
+  end
+end)
+
+local function ScheduleSyncReply()
+  if syncReplyAt then return end
+  syncReplyAt = GetTime() + 0.3 + math.random() * 1.5
+  syncReplyFrame:Show()
+end
+
+local function CancelSyncReply()
+  syncReplyAt = nil
+  syncReplyFrame:Hide()
 end
 
 ------------------------------------------------------------
@@ -956,7 +1133,7 @@ GetRow = function(i)
     if IsShiftKeyDown() then
       OpenInputWindow(name, -1)
     else
-      AddChange(name, -1)
+      AddChange(name, -SCORE_STEP)
       RefreshWindow()
     end
   end)
@@ -967,7 +1144,7 @@ GetRow = function(i)
     if IsShiftKeyDown() then
       OpenInputWindow(name, 1)
     else
-      AddChange(name, 1)
+      AddChange(name, SCORE_STEP)
       RefreshWindow()
     end
   end)
@@ -1160,6 +1337,12 @@ BuildHistoryList = function()
 
   historyContent:SetHeight(math.max(1, count * HISTORY_ROW_HEIGHT))
 
+  if count > 0 and CanEdit() then
+    undoBtn:Show()
+  else
+    undoBtn:Hide()
+  end
+
   if count == 0 then
     historyEmptyText:Show()
   else
@@ -1178,6 +1361,7 @@ local function ApplyTabVisibility()
     if showPlayers then widget:Show() else widget:Hide() end
   end
   if showPlayers then
+    undoBtn:Hide()
     historyScrollFrame:Hide()
     historyEmptyText:Hide()
   else
@@ -1261,6 +1445,8 @@ local lastMenuName, lastMenuTime = nil, 0
 
 local function TryInjectButtons(level, uName)
   if not uName or uName == "" then return end
+  -- Parent menu only — submenus (level 2+) must stay untouched.
+  if level and level ~= 1 then return end
   -- Officers/RL only — never inject (and never risk the menu) otherwise.
   if not CanEdit() then return end
   if not IsTrackedRosterName(uName) then return end
@@ -1325,6 +1511,7 @@ end
 if ToggleDropDownMenu then
   hooksecurefunc("ToggleDropDownMenu", function(level, value, dropdownFrame)
     local ok, err = pcall(function()
+      if level and level ~= 1 then return end
       if not CanEdit() then return end
 
       local ddFrame = dropdownFrame
@@ -1363,6 +1550,7 @@ end
 -- the FontString that's already on screen.
 ------------------------------------------------------------
 local raidRollHooked = false
+local RAIDROLL_MAX_NOTES = 3
 
 local function RaidRoll_AppendScores(RR_DisplayID)
   -- RollerName and RR_ScrollOffset are RaidRoll's own globals
@@ -1382,7 +1570,22 @@ local function RaidRoll_AppendScores(RR_DisplayID)
         local name = nameRow[i + RR_ScrollOffset]
         local p = name and RaidPlusMinusDB.players[name]
         if p and p.score and p.score ~= 0 then
-          rolledFS:SetText(text .. " (" .. FormatScore(p.score) .. ")")
+          -- Newest reasons first, so the "(+5: Tank, AFK)" tail stays short.
+          local notes = {}
+          if type(p.history) == "table" then
+            for h = #p.history, 1, -1 do
+              local reason = p.history[h].reason
+              if reason and reason ~= "" then
+                table.insert(notes, reason)
+                if #notes >= RAIDROLL_MAX_NOTES then break end
+              end
+            end
+          end
+          local tail = FormatScore(p.score)
+          if #notes > 0 then
+            tail = tail .. ": " .. table.concat(notes, ", ")
+          end
+          rolledFS:SetText(text .. " (" .. tail .. ")")
         end
       end
     end
@@ -1399,6 +1602,7 @@ end
 ------------------------------------------------------------
 -- Events
 ------------------------------------------------------------
+local wasInRaid -- nil until PLAYER_ENTERING_WORLD tells us the initial state
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
@@ -1450,12 +1654,17 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
       end
     elseif msgType == "F" then
       if IsOfficerName(sender) then
+        CancelSyncReply()  -- someone else is already answering
         for entry in string.gmatch(rest, "([^;]+)") do
-          local name, score = string.match(entry, "^([^:]+):(-?%d+)$")
+          local name, score, ts = string.match(entry, "^([^:]+):(-?%d+):(%d+)$")
           if name and score then
             local p = EnsurePlayer(name)
-            if p then
+            ts = tonumber(ts) or 0
+            -- Keep our own value if we've seen a newer change than the
+            -- sender had, instead of letting a stale sync clobber it.
+            if p and ts >= (p.updated or 0) then
               p.score = ClampNumber(score, MAX_SCORE)
+              p.updated = ts
             end
           end
         end
@@ -1469,13 +1678,36 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         RefreshWindow()
         frame.syncStatus:SetText(L["SYNC_RESET_BY"]:format(sender, date("%H:%M")))
       end
+    elseif msgType == "U" then
+      local name, delta, author, changeTime, undoTime =
+          string.match(rest, "^([^:]+):(-?%d+):([^:]+):(%d+):(%d+)$")
+      if name and IsOfficerName(sender) then
+        if RemoveLogEntry(name, tonumber(delta), author, tonumber(changeTime), tonumber(undoTime)) then
+          RefreshWindow()
+          if frame:IsShown() then frame.syncStatus:SetText(L["SYNC_UPDATED"]:format(date("%H:%M"))) end
+        end
+      end
     elseif msgType == "RQ" then
       if IsOfficerName(UnitName("player")) then
-        BroadcastFullSync()
+        ScheduleSyncReply()
       end
     end
   else
-    local inGroup = (GetNumRaidMembers() > 0) or (GetNumPartyMembers() > 0)
+    -- Joining or leaving a raid starts a fresh session: drop the previous
+    -- raid's scores locally BEFORE requesting a sync. Local only — never
+    -- broadcast, or leaving would wipe everyone else's data too.
+    local inRaid = GetNumRaidMembers() > 0
+    if event == "PLAYER_ENTERING_WORLD" then
+      -- Login/reload/zoning: just learn the current state, don't wipe.
+      wasInRaid = inRaid
+    elseif wasInRaid ~= nil and inRaid ~= wasInRaid then
+      RaidPlusMinusDB.players = {}
+      RaidPlusMinusDB.globalLog = {}
+      wasInRaid = inRaid
+      hasRequestedSync = false
+    end
+
+    local inGroup = inRaid or (GetNumPartyMembers() > 0)
     if inGroup and not hasRequestedSync then
       hasRequestedSync = true
       RequestSync()
@@ -1568,6 +1800,11 @@ SlashCmdList["RAIDPLUSMINUS"] = function(msg)
     return
   end
 
+  if lowerMsg == "undo" or lowerMsg == "отмена" then
+    UndoLast()
+    return
+  end
+
   if lowerMsg == "status" or lowerMsg == "статус" then
     local myName = UnitName("player")
     local numRaid = GetNumRaidMembers()
@@ -1603,6 +1840,7 @@ SlashCmdList["RAIDPLUSMINUS"] = function(msg)
     DEFAULT_CHAT_FRAME:AddMessage(L["HELP_LINE_ADD_PLUS"])
     DEFAULT_CHAT_FRAME:AddMessage(L["HELP_LINE_ADD_MINUS"])
     DEFAULT_CHAT_FRAME:AddMessage(L["HELP_LINE_DEFAULTS"])
+    DEFAULT_CHAT_FRAME:AddMessage(L["HELP_LINE_UNDO"])
     DEFAULT_CHAT_FRAME:AddMessage(L["HELP_LINE_STATUS"])
     return
   end

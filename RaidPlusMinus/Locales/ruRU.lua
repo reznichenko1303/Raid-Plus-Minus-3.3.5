@@ -82,3 +82,13 @@ L["HELP_LINE_ADD_PLUS"] = "/rpm add plus Ник [значение] [заметк
 L["HELP_LINE_ADD_MINUS"] = "/rpm add minus Ник [значение] [заметка]"
 L["HELP_LINE_DEFAULTS"] = "(значение и заметка необязательны, по умолчанию значение = 1)"
 L["HELP_LINE_STATUS"] = "/rpm status - показать, какие права видит аддон"
+
+-- Undo
+L["BTN_UNDO"] = "Отмена"
+L["ERR_UNDO_EMPTY"] = "Нечего отменять"
+L["MSG_UNDONE"] = "Отменено: %s %s"
+L["HELP_LINE_UNDO"] = "/rpm undo - отменить последнее изменение"
+
+-- Note presets
+L["PRESETS_PLUS"] = { "Оверолл", "Проф", "Танк", "Хил", "Ласт шмотка" }
+L["PRESETS_MINUS"] = { "АФК", "Смерть", "Диспел", "Дух", "Планка" }
